@@ -179,13 +179,13 @@ dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
 
     //GT
-//    if (findProject(':TesseractAPI') != null) {
+    if (findProject(':TesseractAPI') != null) {
         implementation project(':TesseractAPI')
-//    } else {
+    } else {
         //Ensure there is a local mod version!
- //       runtimeOnly fg.deobf("com.github.GregTech-Intergalactical:TesseractAPI:${tesseract_version}")
- //       compileOnly ("com.github.GregTech-Intergalactical:TesseractAPI:${tesseract_version}")
- //   }
+        runtimeOnly fg.deobf("com.github.GregTech-Intergalactical:TesseractAPI:${tesseract_version}")
+        compileOnly ("com.github.GregTech-Intergalactical:TesseractAPI:${tesseract_version}")
+    }
 
     //JEI
     compileOnly fg.deobf("mezz.jei:jei-${jei_version}:api")
