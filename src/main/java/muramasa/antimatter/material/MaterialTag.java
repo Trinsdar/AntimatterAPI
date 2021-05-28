@@ -31,7 +31,7 @@ public class MaterialTag implements IMaterialTag {
     public static MaterialTag ELEMENTAL = new MaterialTag("elemental");
 
     /** ETC **/
-    public static MaterialTag HANDLE = new MaterialTag("handle");
+    public static MaterialTag HANDLE = new MaterialTag("handle_tag");
 
     /** PIPES **/
     public static MaterialTag ITEMPIPE = new MaterialTag("itempipe");
