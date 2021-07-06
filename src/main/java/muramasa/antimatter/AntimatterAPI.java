@@ -34,9 +34,9 @@ import org.apache.logging.log4j.LogManager;
 import javax.annotation.Nullable;
 import java.util.*;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import static muramasa.antimatter.machine.MachineFlag.STEAM;
 import static muramasa.antimatter.util.Utils.getConventionalMaterialType;
 
 public final class AntimatterAPI {
@@ -72,6 +72,16 @@ public final class AntimatterAPI {
 
     public static void register(Class<?> c, IAntimatterObject o) {
         register(c, o.getId(), o);
+    }
+
+    public static <T extends IAntimatterObject> T registerIfAbsent(Class<? extends T> clazz, String id, Supplier<? extends T> obj) {
+        T o = get(clazz, id);
+        if (o != null) return o;
+        o = obj.get();
+        //the constructor of get() might register.
+        if (get(clazz, id) == null)
+            register(clazz, o);
+        return o;
     }
 
     private static boolean notRegistered(Class<?> c, String id) {
@@ -148,7 +158,8 @@ public final class AntimatterAPI {
             throw new IllegalStateException("The RegistrationEvent " + event.name() + " has already been handled");
         }
         INTERNAL_REGISTRAR.onRegistrationEvent(event, side);
-        all(IAntimatterRegistrar.class, r -> r.onRegistrationEvent(event, side));
+        List<IAntimatterRegistrar> list = all(IAntimatterRegistrar.class).stream().sorted((c1, c2) -> Integer.compare(c2.getPriority(), c1.getPriority())).collect(Collectors.toList());
+        list.forEach(r -> r.onRegistrationEvent(event, side));
         if (CALLBACKS.containsKey(event)) CALLBACKS.get(event).forEach(Runnable::run);
     }
 
@@ -175,20 +186,21 @@ public final class AntimatterAPI {
     }
 
     /** JEI Registry Section **/
-    public static void registerJEICategory(RecipeMap<?> map, GuiData gui, Tier tier, String model) {
-        if (ModList.get().isLoaded(Ref.MOD_JEI)) {
-            AntimatterJEIPlugin.registerCategory(map, gui,tier, model);
+
+    public static void registerJEICategory(RecipeMap<?> map, GuiData gui, Tier tier, String model, boolean override) {
+        if (ModList.get().isLoaded(Ref.MOD_JEI) || ModList.get().isLoaded(Ref.MOD_REI)) {
+            AntimatterJEIPlugin.registerCategory(map, gui,tier, model, override);
         }
     }
 
-    public static void registerJEICategory(RecipeMap<?> map, GuiData gui, Machine<?> machine) {
-        if (ModList.get().isLoaded(Ref.MOD_JEI)) {
-            AntimatterJEIPlugin.registerCategory(map, gui, machine.has(STEAM) ? Tier.BRONZE : Tier.LV, machine.getId());
+    public static void registerJEICategory(RecipeMap<?> map, GuiData gui, Machine<?> machine, boolean override) {
+        if (ModList.get().isLoaded(Ref.MOD_JEI) || ModList.get().isLoaded(Ref.MOD_REI)) {
+            AntimatterJEIPlugin.registerCategory(map, gui, machine.getFirstTier(), machine.getId(), override);
         }
     }
 
     public static void registerJEICategory(RecipeMap<?> map, GuiData gui) {
-       registerJEICategory(map,gui,Tier.LV, null);
+       registerJEICategory(map,gui,Tier.LV, null, true);
     }
 
     public static IRecipeRegistrate getRecipeRegistrate() {
@@ -197,6 +209,7 @@ public final class AntimatterAPI {
 
     //TODO: Allow other than item.
     public static Item getReplacement(MaterialType<?> type, Material material, String... namespaces) {
+        if (type.getId().contains("liquid")) return null;
         ITag.INamedTag<Item> tag = TagUtils.getForgeItemTag(String.join("", getConventionalMaterialType(type), "/", material.getId()));
         return getReplacement(null, tag, namespaces);
     }
@@ -241,12 +254,12 @@ public final class AntimatterAPI {
      * @see ServerWorld#notifyBlockUpdate(BlockPos, BlockState, BlockState, int)
      */
     @SuppressWarnings("unused")
-    public static void onNotifyBlockUpdate(World world, BlockPos pos, BlockState oldState, BlockState newState) {
-        BLOCK_UPDATE_HANDLERS.forEach(h -> h.onNotifyBlockUpdate(world, pos, oldState, newState));
+    public static void onNotifyBlockUpdate(World world, BlockPos pos, BlockState oldState, BlockState newState, int flags) {
+        BLOCK_UPDATE_HANDLERS.forEach(h -> h.onNotifyBlockUpdate(world, pos, oldState, newState, flags));
     }
 
     public interface IBlockUpdateEvent {
 
-        void onNotifyBlockUpdate(World world, BlockPos pos, BlockState oldState, BlockState newState);
+        void onNotifyBlockUpdate(World world, BlockPos pos, BlockState oldState, BlockState newState, int flags);
     }
 }

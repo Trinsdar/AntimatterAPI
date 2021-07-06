@@ -1,16 +1,17 @@
 package muramasa.antimatter.gui.slot;
 
+import muramasa.antimatter.gui.SlotType;
+import muramasa.antimatter.tile.TileEntityMachine;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.items.IItemHandler;
-import net.minecraftforge.items.SlotItemHandler;
 
 import javax.annotation.Nonnull;
 
 //TODO: Should be used on filters
-public class SlotFake extends SlotItemHandler {
-    public SlotFake(IItemHandler stackHandler, int index, int x, int y) {
-        super(stackHandler, index, x, y);
+public class SlotFake extends AbstractSlot<SlotFake> {
+    public SlotFake(SlotType<SlotFake> type, TileEntityMachine<?> tile, IItemHandler stackHandler, int index, int x, int y) {
+        super(type, tile, stackHandler, index, x, y);
     }
 
     @Override

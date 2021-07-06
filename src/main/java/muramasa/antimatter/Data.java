@@ -1,8 +1,10 @@
 package muramasa.antimatter;
 
 import com.google.common.collect.ImmutableMap;
+import muramasa.antimatter.block.BlockProxy;
 import muramasa.antimatter.block.BlockStorage;
 import muramasa.antimatter.block.BlockSurfaceRock;
+import muramasa.antimatter.client.ClientData;
 import muramasa.antimatter.cover.*;
 import muramasa.antimatter.fluid.AntimatterFluid;
 import muramasa.antimatter.gui.MenuHandlerCover;
@@ -11,7 +13,6 @@ import muramasa.antimatter.gui.container.*;
 import muramasa.antimatter.item.DebugScannerItem;
 import muramasa.antimatter.item.ItemFluidCell;
 import muramasa.antimatter.machine.BlockMachine;
-import muramasa.antimatter.machine.types.Machine;
 import muramasa.antimatter.material.*;
 import muramasa.antimatter.ore.BlockOre;
 import muramasa.antimatter.ore.BlockOreStone;
@@ -24,6 +25,7 @@ import muramasa.antimatter.pipe.types.ItemPipe;
 import muramasa.antimatter.pipe.types.PipeType;
 import muramasa.antimatter.recipe.ingredient.PropertyIngredient;
 import muramasa.antimatter.recipe.material.MaterialRecipe;
+import muramasa.antimatter.structure.BlockStateElement;
 import muramasa.antimatter.structure.StructureBuilder;
 import muramasa.antimatter.structure.StructureElement;
 import muramasa.antimatter.texture.Texture;
@@ -35,6 +37,7 @@ import muramasa.antimatter.tool.MaterialSword;
 import muramasa.antimatter.tool.armor.AntimatterArmorType;
 import muramasa.antimatter.tool.behaviour.*;
 import muramasa.antimatter.util.Utils;
+import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.SoundType;
 import net.minecraft.block.material.MaterialColor;
@@ -44,7 +47,10 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.inventory.CraftingInventory;
 import net.minecraft.inventory.EquipmentSlotType;
-import net.minecraft.item.*;
+import net.minecraft.item.BlockItem;
+import net.minecraft.item.DyeColor;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.CompoundNBT;
 import net.minecraft.util.SoundEvents;
 import net.minecraft.util.text.TextFormatting;
@@ -61,123 +67,6 @@ import static muramasa.antimatter.material.TextureSet.NONE;
 import static net.minecraft.block.material.Material.*;
 
 public class Data {
-
-    /** RECIPE BUILDERS **/
-
-    public static final MaterialRecipe.Provider ARMOR_BUILDER = MaterialRecipe.registerProvider("armor",id -> new MaterialRecipe.ItemBuilder() {
-
-       @Override
-       public ItemStack build(CraftingInventory inv, MaterialRecipe.Result mats) {
-           return AntimatterAPI.get(AntimatterArmorType.class, id).getToolStack((Material) mats.mats.get("primary"));
-       }
-
-       @Override
-       public Map<String, Object> getFromResult(@Nonnull ItemStack stack) {
-           CompoundNBT nbt = stack.getTag(). getCompound(Ref.TAG_TOOL_DATA);
-           Material primary = AntimatterAPI.get(Material.class, nbt.getString(Ref.KEY_TOOL_DATA_PRIMARY_MATERIAL));
-           return ImmutableMap.of("primary", primary != null ? primary : NULL);
-       }
-   });
-
-    public static final MaterialRecipe.Provider ITEM_PIPE_BUILDER = MaterialRecipe.registerProvider("pipe", id  -> new MaterialRecipe.ItemBuilder() {
-
-        @Override
-        public ItemStack build(CraftingInventory inv, MaterialRecipe.Result mats) {
-            PipeSize size = PipeSize.valueOf(id.toUpperCase(Locale.ENGLISH));
-            Material mat = (Material) mats.mats.get("primary");
-            PipeType p = AntimatterAPI.get(ItemPipe.class, "item_" + mat.getId());
-            int amount = size == PipeSize.TINY ? 12 : size == PipeSize.SMALL ? 6 : size == PipeSize.NORMAL ? 2 : 1;
-            return new ItemStack(p.getBlock(size), amount);
-        }
-
-        @Override
-        public Map<String, Object> getFromResult(@Nonnull ItemStack stack) {
-            return ImmutableMap.of("primary",((PipeItemBlock)stack.getItem()).getPipe().getType().getMaterial());
-        }
-    });
-
-    public static final MaterialRecipe.Provider DUST_BUILDER = MaterialRecipe.registerProvider("dust", id -> new MaterialRecipe.ItemBuilder() {
-        final MaterialTypeItem type = AntimatterAPI.get(MaterialTypeItem.class, id);
-        @Override
-        public ItemStack build(CraftingInventory inv, MaterialRecipe.Result mats) {
-            Material mat = (Material) mats.mats.get("primary");
-            return type.get(mat, 1);
-        }
-
-        @Override
-        public Map<String, Object> getFromResult(@Nonnull ItemStack stack) {
-            if (stack.getItem() instanceof MaterialItem) {
-                return ImmutableMap.of("primary", ((MaterialItem)stack.getItem()).getMaterial());
-            }
-            Material mat = type.tryMaterialFromItem(stack);
-            if (mat != null) {
-                return ImmutableMap.of("primary", mat);
-            }
-            return null;
-        }
-    });
-
-    public static final MaterialRecipe.Provider FLUID_PIPE_BUILDER = MaterialRecipe.registerProvider("fluid", id  -> new MaterialRecipe.ItemBuilder() {
-
-        @Override
-        public ItemStack build(CraftingInventory inv, MaterialRecipe.Result mats) {
-            PipeSize size = PipeSize.valueOf(id.toUpperCase(Locale.ENGLISH));
-            Material mat = (Material) mats.mats.get("primary");
-            PipeType p = AntimatterAPI.get(FluidPipe.class, "fluid_" + mat.getId());
-            int amount = size == PipeSize.TINY ? 12 : size == PipeSize.SMALL ? 6 : size == PipeSize.NORMAL ? 2 : 1;
-            return new ItemStack(p.getBlock(size), amount);
-        }
-
-        @Override
-        public Map<String, Object> getFromResult(@Nonnull ItemStack stack) {
-            return ImmutableMap.of("primary",((PipeItemBlock)stack.getItem()).getPipe().getType().getMaterial());
-        }
-    });
-
-    public static final MaterialRecipe.Provider TOOL_BUILDER = MaterialRecipe.registerProvider("tool", id -> new MaterialRecipe.ItemBuilder() {
-
-        @Override
-        public ItemStack build(CraftingInventory inv, MaterialRecipe.Result mats) {
-            Material m = (Material) mats.mats.get("secondary");
-            AntimatterToolType type = AntimatterAPI.get(AntimatterToolType.class, id);
-            ItemStack stack = type.getToolStack((Material) mats.mats.get("primary"), m == null ? NULL : m);
-            return stack;
-        }
-
-        @Override
-        public Map<String, Object> getFromResult(@Nonnull ItemStack stack) {
-            CompoundNBT nbt = stack.getTag().getCompound(Ref.TAG_TOOL_DATA);
-            Material primary = AntimatterAPI.get(Material.class, nbt.getString(Ref.KEY_TOOL_DATA_PRIMARY_MATERIAL));
-            Material secondary = AntimatterAPI.get(Material.class, nbt.getString(Ref.KEY_TOOL_DATA_SECONDARY_MATERIAL));
-            return ImmutableMap.of("primary", primary != null ? primary : NULL, "secondary", secondary != null ? secondary : NULL);
-        }
-    });
-
-    public static final MaterialRecipe.Provider CROWBAR_BUILDER = MaterialRecipe.registerProvider("crowbar", id -> new MaterialRecipe.ItemBuilder() {
-        @Override
-        public ItemStack build(CraftingInventory inv, MaterialRecipe.Result mats) {
-            int dye = ((DyeColor) mats.mats.get("secondary")).getColorValue();
-            AntimatterToolType type = AntimatterAPI.get(AntimatterToolType.class, id);
-            ItemStack stack = type.getToolStack(((Material) mats.mats.get("primary")), NULL);
-            stack.getChildTag(Ref.TAG_TOOL_DATA).putInt(Ref.KEY_TOOL_DATA_SECONDARY_COLOUR, dye);
-            return stack;
-        }
-
-        @Override
-        public Map<String, Object> getFromResult(@Nonnull ItemStack stack) {
-            CompoundNBT nbt = stack.getTag().getCompound(Ref.TAG_TOOL_DATA);
-            Material primary = AntimatterAPI.get(Material.class, nbt.getString(Ref.KEY_TOOL_DATA_PRIMARY_MATERIAL));
-            int secondary = nbt.getInt(Ref.KEY_TOOL_DATA_SECONDARY_COLOUR);
-            Optional<DyeColor> color = Arrays.stream(DyeColor.values()).filter(t -> t.getColorValue() == secondary).findFirst();
-            return ImmutableMap.of("primary", primary != null ? primary : NULL, "secondary", color.orElse(DyeColor.WHITE));
-        }
-    });
-
-    static {
-        PropertyIngredient.addGetter(Tags.Items.DYES.getName(), DyeColor::getColor);
-    }
-
-    /** END RECIPE BUILDERS **/
 
     public static final net.minecraft.block.material.Material WRENCH_MATERIAL = new net.minecraft.block.material.Material(MaterialColor.IRON, false, true, true, true, false, false, PushReaction.NORMAL);
 
@@ -272,7 +161,7 @@ public class Data {
     public static StoneType ENDSTONE = new StoneType(Ref.ID, "endstone", Endstone, new Texture("minecraft", "block/end_stone"), SoundType.STONE, false).setState(Blocks.END_STONE).setHardnessAndResistance(3.0F, 9.0F);
 
     static {
-        StructureBuilder.addGlobalElement("A", StructureElement.AIR);
+        StructureBuilder.addGlobalElement("A", BlockStateElement.AIR);
         StructureBuilder.addGlobalElement(" ", StructureElement.IGNORE);
         NULL.remove(ROD);
 
@@ -347,58 +236,55 @@ public class Data {
     public static final AntimatterToolType SWORD = new AntimatterToolType(Ref.ID, "sword", 2, 1, 10, 3.0F, -2.4F).setToolClass(MaterialSword.class).addEffectiveBlocks(Blocks.COBWEB);
     public static final AntimatterToolType PICKAXE = new AntimatterToolType(Ref.ID, "pickaxe", 1, 2, 10, 1.0F, -2.8F).addEffectiveMaterials(PACKED_ICE, IRON, net.minecraft.block.material.Material.ROCK, ANVIL, PISTON);
     public static final AntimatterToolType SHOVEL = new AntimatterToolType(Ref.ID, "shovel", 1, 2, 10, 1.5F, -3.0F).addEffectiveMaterials(CLAY, net.minecraft.block.material.Material.SAND, SNOW, SNOW_BLOCK, EARTH);
-    public static final AntimatterToolType AXE = new AntimatterToolType(Ref.ID, "axe", 1, 1, 10, 5.0F, -3.0F).addEffectiveMaterials(WOOD, PLANTS, TALL_PLANTS, BAMBOO);
-    public static final AntimatterToolType HOE = new AntimatterToolType(Ref.ID, "hoe", 1, 2, 10, 0.0F, -3.0F);
+    public static final AntimatterToolType AXE = new AntimatterToolType(Ref.ID, "axe", 1, 1, 10, 6.0F, -3.0F).addEffectiveMaterials(WOOD, PLANTS, TALL_PLANTS, BAMBOO);
+    public static final AntimatterToolType HOE = new AntimatterToolType(Ref.ID, "hoe", 1, 2, 10, -3.0F, 0.0F);
     public static final AntimatterToolType HAMMER = new AntimatterToolType(Ref.ID, "hammer", 1, 2, 2, 3.0F, -3.0F).addToolTypes("pickaxe").addEffectiveMaterials(IRON, net.minecraft.block.material.Material.ROCK).setUseSound(SoundEvents.BLOCK_ANVIL_PLACE);
     public static final AntimatterToolType WRENCH = new AntimatterToolType(Ref.ID, "wrench", 2, 2, 2, 1.5F, -2.8F).setUseSound(Ref.WRENCH).setOverlayLayers(0);
-    public static final AntimatterToolType SAW = new AntimatterToolType(Ref.ID, "saw", 2, 2, 2, 2.0F, -2.8F);
+    public static final AntimatterToolType SAW = new AntimatterToolType(Ref.ID, "saw", 2, 2, 2, 2.0F, -2.8F).addEffectiveBlocks(Blocks.ICE, Blocks.PACKED_ICE, Blocks.BLUE_ICE);
     public static final AntimatterToolType FILE = new AntimatterToolType(Ref.ID, "file", 2, 2, 2, -2.0F, -2.4F);
     public static final AntimatterToolType CROWBAR = new AntimatterToolType(Ref.ID, "crowbar", 2, 10, 5, 1.0F, -2.0F).setUseSound(SoundEvents.ENTITY_ITEM_BREAK).setSecondaryRequirement(MaterialTag.RUBBERTOOLS);
-    public static final AntimatterToolType DRILL = new AntimatterToolType(Ref.ID, "drill", 2, 2, 10, 3.0F, -3.0F).setPowered(100000, 1, 2, 3).setUseAction(UseAction.SPEAR).setUseSound(Ref.DRILL).addToolTypes("pickaxe", "shovel").addEffectiveMaterials(PACKED_ICE, IRON, net.minecraft.block.material.Material.ROCK, ANVIL, PISTON, EARTH, CLAY, net.minecraft.block.material.Material.SAND);
+    public static final AntimatterToolType DRILL = new AntimatterToolType(Ref.ID, "drill", 2, 2, 10, 3.0F, -3.0F).setPowered(100000, 1, 2, 3).setUseSound(Ref.DRILL).addToolTypes("pickaxe", "shovel").addEffectiveMaterials(PACKED_ICE, IRON, net.minecraft.block.material.Material.ROCK, ANVIL, PISTON, EARTH, CLAY, net.minecraft.block.material.Material.SAND);
+    public static final AntimatterToolType SOFT_HAMMER = new AntimatterToolType(Ref.ID, "soft_hammer", 2, 2, 2, 1.0F, -3.0F);//.setUseSound();
     public static final AntimatterToolType SCREWDRIVER = new AntimatterToolType(Ref.ID, "screwdriver", 2, 2, 2, 0.0F, -1.0F).setUseSound(Ref.WRENCH);
     public static final AntimatterToolType MORTAR = new AntimatterToolType(Ref.ID, "mortar", 5, 5, 2, -2.0F, 0.0F).setUseSound(SoundEvents.BLOCK_GRINDSTONE_USE).setBlockBreakability(false);
     public static final AntimatterToolType WIRE_CUTTER = new AntimatterToolType(Ref.ID, "wire_cutter", 5, 3, 2, 0.0F, -1.5F).setUseSound(SoundEvents.ENTITY_SHEEP_SHEAR).addEffectiveMaterials(WOOL, SPONGE, WEB, CARPET);
+    public static final AntimatterToolType BRANCH_CUTTER = new AntimatterToolType(Ref.ID, "branch_cutter", 1, 3, 2, 0.0F, -1.5F).addToolTypes("grafter").addEffectiveMaterials(LEAVES);
     public static final AntimatterToolType KNIFE = new AntimatterToolType(Ref.ID, "knife", 2, 2, 5, 2.1F, -2.0F).setToolClass(MaterialSword.class).addEffectiveBlocks(Blocks.COBWEB);
     public static final AntimatterToolType PLUNGER = new AntimatterToolType(Ref.ID, "plunger", 5, 5, 10, 0.0F, -2.9F).setUseSound(SoundEvents.ITEM_BUCKET_EMPTY).setPrimaryRequirement(MaterialTag.RUBBERTOOLS);
-    public static final AntimatterToolType CHAINSAW = new AntimatterToolType(Ref.ID, "chainsaw", 2, 1, 5, 3.0F, -2.0F).setPowered(100000, 1, 2, 3).setUseAction(UseAction.BOW).addEffectiveMaterials(WOOD, PLANTS, TALL_PLANTS, BAMBOO, LEAVES).addToolTypes("axe", "saw");
-    public static final AntimatterToolType ELECTRIC_WRENCH = new AntimatterToolType(Ref.ID, "electric_wrench", WRENCH).setTag(WRENCH).setPowered(100000, 1, 2, 3).setUseSound(Ref.WRENCH);
+    public static final AntimatterToolType CHAINSAW = new AntimatterToolType(Ref.ID, "chainsaw", 2, 1, 5, 3.0F, -2.0F).setPowered(100000, 1, 2, 3).addEffectiveMaterials(WOOD, PLANTS, TALL_PLANTS, BAMBOO, LEAVES).addToolTypes("axe", "saw");
+    public static final AntimatterToolType ELECTRIC_WRENCH = new AntimatterToolType(Ref.ID, "electric_wrench", WRENCH).setTag(WRENCH).setPowered(100000, 1, 2, 3).setUseSound(Ref.WRENCH).addToolTypes("wrench");
     public static final AntimatterToolType ELECTRIC_SCREWDRIVER = new AntimatterToolType(Ref.ID, "electric_screwdriver", SCREWDRIVER).setTag(SCREWDRIVER).setPowered(100000, 1, 2, 3).setUseSound(Ref.WRENCH).setOverlayLayers(2);
-    public static final AntimatterToolType JACKHAMMER = new AntimatterToolType(Ref.ID, "jackhammer", 2, 2, 10, 1.0F, -3.2F).setPowered(100000, 1, 2, 3).setUseAction(UseAction.SPEAR).setUseSound(Ref.DRILL).addEffectiveMaterials(net.minecraft.block.material.Material.ROCK, EARTH, net.minecraft.block.material.Material.SAND, ORGANIC);
-    public static final AntimatterToolType BUZZSAW = new AntimatterToolType(Ref.ID, "buzzsaw", 2, 2, 2, 0.5F, -2.7F).setTag(SAW).setPowered(100000, 1, 2, 3).setOverlayLayers(2);
+    public static final AntimatterToolType JACKHAMMER = new AntimatterToolType(Ref.ID, "jackhammer", 2, 2, 10, 1.0F, -3.2F).setPowered(100000, 1, 2, 3).setUseSound(Ref.DRILL).addEffectiveMaterials(net.minecraft.block.material.Material.ROCK, EARTH, net.minecraft.block.material.Material.SAND, ORGANIC);
+    public static final AntimatterToolType BUZZSAW = new AntimatterToolType(Ref.ID, "buzzsaw", 2, 2, 2, 0.5F, -2.7F).setTag(SAW).setPowered(100000, 1, 2, 3).setOverlayLayers(2).addToolTypes("saw");
     public static final AntimatterArmorType HELMET = new AntimatterArmorType(Ref.ID, "helmet", 40, 2, 0.0F, 0.0F, EquipmentSlotType.HEAD);
     public static final AntimatterArmorType CHESTPLATE = new AntimatterArmorType(Ref.ID, "chestplate", 40, 6, 0.0F, 0.0F, EquipmentSlotType.CHEST);
     public static final AntimatterArmorType LEGGINGS = new AntimatterArmorType(Ref.ID, "leggings", 40, 5, 0.0F, 0.0F, EquipmentSlotType.LEGS);
     public static final AntimatterArmorType BOOTS = new AntimatterArmorType(Ref.ID, "boots", 40, 2, 0.0F, 0.0F, EquipmentSlotType.FEET);
 
-    public static Machine<?> MACHINE_INVALID = new Machine<>(Ref.ID, "invalid");
+    //public static Machine<?> MACHINE_INVALID = new Machine<>(Ref.ID, "invalid");
 
     public static BaseCover COVERNONE = new CoverNone(); //TODO: deal with default? Singleton of Cover&CoverInstance is not done.
     public static CoverOutput COVEROUTPUT = new CoverOutput();
     public static ICover COVERINPUT = new CoverInput();
-    public static ICover COVERMUFFLER = new CoverMuffler();
-    public static ICover COVERDYNAMO = new CoverDynamo("dynamo");
-    public static ICover COVERENERGY = new CoverEnergy();
-    public static ICover COVERBUFFERONE = new CoverDynamo("buffer_one");
-    public static ICover COVERBUFFERFOUR = new CoverDynamo("buffer_four");
-    public static ICover COVERBUFFERNINE = new CoverDynamo("buffer_nine");
+    //public static ICover COVERMUFFLER = new CoverMuffler();
+    //public static ICover COVERDYNAMO = new CoverDynamo("dynamo");
+    //public static ICover COVERENERGY = new CoverEnergy();
 
     public static CoverStack<?> COVER_EMPTY = new CoverStack<>(COVERNONE);
     public static CoverStack<?> COVER_OUTPUT = new CoverStack<>(COVEROUTPUT);
 
+    public static BlockProxy PROXY_INSTANCE = new BlockProxy(Ref.ID, "proxy", AbstractBlock.Properties.create(net.minecraft.block.material.Material.ROCK).hardnessAndResistance(1.0f, 1.0f).notSolid());
 
-    public static MenuHandlerMachine<ContainerMachine> BASIC_MENU_HANDLER = new MenuHandlerMachine<ContainerMachine>(Ref.ID, "container_basic") {
+
+    public static MenuHandlerMachine<? extends TileEntityMachine, ? extends ContainerBasicMachine> BASIC_MENU_HANDLER = new MenuHandlerMachine(Ref.ID, "container_basic") {
         @Nullable
         @Override
-        public ContainerMachine getMenu(Object tile, PlayerInventory playerInv, int windowId) {
-            return tile instanceof TileEntityMachine ? new ContainerBasicMachine((TileEntityMachine) tile, playerInv, this, windowId) : null;
+        public ContainerMachine<?> getMenu(Object tile, PlayerInventory playerInv, int windowId) {
+            return tile instanceof TileEntityMachine ? new ContainerBasicMachine((TileEntityMachine<?>) tile, playerInv, this, windowId) : null;
         }
-    };
-
-    public static MenuHandlerMachine<ContainerMachine> STEAM_MENU_HANDLER = new MenuHandlerMachine<ContainerMachine>(Ref.ID, "container_steam") {
-        @Nullable
         @Override
-        public ContainerMachine getMenu(Object tile, PlayerInventory playerInv, int windowId) {
-            return tile instanceof TileEntityMachine ? new ContainerBasicMachine((TileEntityMachine) tile, playerInv, this, windowId) : null;
+        public Object screen() {
+            return ClientData.SCREEN_BASIC;
         }
     };
 
@@ -409,26 +295,37 @@ public class Data {
         }
     };
 
-    public static MenuHandlerMachine<ContainerMultiMachine> MULTI_MENU_HANDLER = new MenuHandlerMachine<ContainerMultiMachine>(Ref.ID, "container_multi") {
+    public static MenuHandlerMachine<? extends TileEntityMultiMachine, ? extends ContainerMultiMachine> MULTI_MENU_HANDLER = new MenuHandlerMachine(Ref.ID, "container_multi") {
         @Override
         public ContainerMultiMachine getMenu(Object tile, PlayerInventory playerInv, int windowId) {
-            return tile instanceof TileEntityMultiMachine ? new ContainerMultiMachine((TileEntityMultiMachine) tile, playerInv, this, windowId) : null;
+            return tile instanceof TileEntityMultiMachine ? new ContainerMultiMachine((TileEntityMultiMachine<?>) tile, playerInv, this, windowId) : null;
+        }
+
+        @Override
+        public Object screen() {
+            return ClientData.SCREEN_MULTI;
         }
     };
 
-    public static MenuHandlerMachine<ContainerHatch> HATCH_MENU_HANDLER = new MenuHandlerMachine<ContainerHatch>(Ref.ID, "container_hatch") {
+    public static MenuHandlerMachine<? extends TileEntityHatch, ? extends ContainerHatch> HATCH_MENU_HANDLER = new MenuHandlerMachine(Ref.ID, "container_hatch") {
         @Override
         public ContainerHatch getMenu(Object tile, PlayerInventory playerInv, int windowId) {
-            return tile instanceof TileEntityHatch ? new ContainerHatch((TileEntityHatch) tile, playerInv, this, windowId) : null;
+            return tile instanceof TileEntityHatch ? new ContainerHatch((TileEntityHatch<?>) tile, playerInv, this, windowId) : null;
+        }
+        @Override
+        public Object screen() {
+            return ClientData.SCREEN_HATCH;
         }
     };
 
     public static void init(Dist side) {
         AXE.addBehaviour(BehaviourLogStripping.INSTANCE, BehaviourTreeFelling.INSTANCE);
+        PICKAXE.addBehaviour(BehaviourTorchPlacing.INSTANCE);
         CHAINSAW.addBehaviour(BehaviourTreeFelling.INSTANCE, BehaviourLogStripping.INSTANCE, new BehaviourAOEBreak(1, 1, 1));
-        DRILL.addBehaviour(new BehaviourAOEBreak(1, 1, 1));
+        DRILL.addBehaviour(new BehaviourAOEBreak(1, 1, 1), BehaviourTorchPlacing.INSTANCE);
         JACKHAMMER.addBehaviour(new BehaviourAOEBreak(1, 0, 2));
         PLUNGER.addBehaviour(BehaviourWaterlogToggle.INSTANCE);
+        KNIFE.addBehaviour(BehaviourPumpkinCarving.INSTANCE);
         for (AntimatterToolType type : AntimatterAPI.all(AntimatterToolType.class)) {
             if (type.getToolTypes().contains("shovel")) type.addBehaviour(BehaviourVanillaShovel.INSTANCE);
             if (type.getToolTypes().contains("hoe")) type.addBehaviour(BehaviourBlockTilling.INSTANCE);
@@ -441,6 +338,7 @@ public class Data {
 
     private static void clientBehaviours() {
         WRENCH.addBehaviour(new BehaviourExtendedHighlight(b -> b instanceof BlockMachine || (b instanceof BlockPipe && b.getHarvestTool(b.getDefaultState()) == WRENCH.getToolType()), BehaviourExtendedHighlight.PIPE_FUNCTION));
+        SCREWDRIVER.addBehaviour(new BehaviourExtendedHighlight(b -> b instanceof BlockMachine || b instanceof BlockPipe, BehaviourExtendedHighlight.COVER_FUNCTION));
         ELECTRIC_WRENCH.addBehaviour(new BehaviourExtendedHighlight(b -> b instanceof BlockMachine ||  (b instanceof BlockPipe && b.getHarvestTool(b.getDefaultState()) == WRENCH.getToolType()), BehaviourExtendedHighlight.PIPE_FUNCTION));
         WIRE_CUTTER.addBehaviour(new BehaviourExtendedHighlight(b -> b instanceof BlockPipe && b.getHarvestTool(b.getDefaultState()) == WIRE_CUTTER.getToolType(), BehaviourExtendedHighlight.PIPE_FUNCTION));
         CROWBAR.addBehaviour(new BehaviourExtendedHighlight(b -> b instanceof BlockMachine || b instanceof BlockPipe, BehaviourExtendedHighlight.COVER_FUNCTION));

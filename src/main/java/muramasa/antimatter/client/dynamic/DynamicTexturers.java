@@ -1,7 +1,5 @@
 package muramasa.antimatter.client.dynamic;
 
-import java.util.List;
-
 import com.mojang.datafixers.util.Either;
 import muramasa.antimatter.AntimatterProperties;
 import muramasa.antimatter.client.ModelUtils;
@@ -9,7 +7,6 @@ import muramasa.antimatter.cover.ICover;
 import muramasa.antimatter.tile.TileEntityMachine;
 import muramasa.antimatter.util.Utils;
 import net.minecraft.client.renderer.model.IBakedModel;
-import net.minecraft.state.properties.BlockStateProperties;
 import net.minecraft.util.Direction;
 import net.minecraft.util.ResourceLocation;
 import net.minecraftforge.client.model.ModelLoader;
@@ -29,12 +26,12 @@ public class DynamicTexturers {
     });
 
     public static final DynamicTextureProvider<TileEntityMachine, TileEntityMachine.DynamicKey> TILE_DYNAMIC_TEXTURER = new DynamicTextureProvider<TileEntityMachine, TileEntityMachine.DynamicKey>(t -> {
-        IBakedModel b = t.sourceModel.bakeModel(ModelLoader.instance(), ModelLoader.defaultTextureGetter(), new SimpleModelTransform(Utils.getModelRotationCoverClient(t.state.get(BlockStateProperties.HORIZONTAL_FACING)).getRotation().inverse()), new ResourceLocation(t.source.getId()));
+        IBakedModel b = t.sourceModel.bakeModel(ModelLoader.instance(), ModelLoader.defaultTextureGetter(), new SimpleModelTransform(Utils.getModelRotationCoverClient(Utils.dirFromState(t.state)).getRotation().inverse()), new ResourceLocation(t.source.getId()));
         assert b != null;
         return b.getQuads(t.state, null, t.rand, t.data);
     }, t -> {
         t.model.textures.put("base", Either.left(ModelUtils.getBlockMaterial(t.data.getData(AntimatterProperties.MULTI_MACHINE_TEXTURE).apply(t.dir))));
-        t.model.textures.put("overlay", Either.left(ModelUtils.getBlockMaterial(t.data.getData(AntimatterProperties.MACHINE_TYPE).getOverlayTextures(t.data.getData(AntimatterProperties.MACHINE_STATE))[
-                Direction.rotateFace(Utils.getModelRotation(t.source.getBlockState().get(BlockStateProperties.HORIZONTAL_FACING)).getRotation().inverse().getMatrix(), t.dir).getIndex()])));
+        t.model.textures.put("overlay", Either.left(ModelUtils.getBlockMaterial(t.data.getData(AntimatterProperties.MACHINE_TYPE).getOverlayTextures(t.data.getData(AntimatterProperties.MACHINE_STATE), t.source.getMachineTier())[
+                Direction.rotateFace(Utils.getModelRotation(Utils.dirFromState(t.source.getBlockState())).getRotation().inverse().getMatrix(), t.dir).getIndex()])));
     });
 }

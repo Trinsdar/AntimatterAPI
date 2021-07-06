@@ -5,12 +5,17 @@
   "refmap": "antimatter.refmap.json",
   "client": [
     "ClientBlockUpdateMixin",
-    "ClientPlayNetHandlerMixin"
+    "ClientPlayNetHandlerMixin",
+    "ChunkReaderAccessor"
   ],
   "mixins": [
+    "BlockLootTablesAccessor",
+    "LeavesBlockMixin",
+    "IceBlockMixin",
     "RecipeManagerMixin",
     "ServerBlockUpdateMixin",
-    "SimpleReloadableResourceManagerMixin"
+    "SimpleReloadableResourceManagerMixin",
+    "ItemStackMixin"
   ],
   "minVersion": "0.8"
 }

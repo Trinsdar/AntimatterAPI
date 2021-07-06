@@ -1,6 +1,6 @@
 package muramasa.antimatter.tile.pipe;
 
-import muramasa.antimatter.Ref;
+import muramasa.antimatter.capability.Dispatch;
 import muramasa.antimatter.capability.pipe.PipeCoverHandler;
 import muramasa.antimatter.pipe.types.Cable;
 import muramasa.antimatter.pipe.types.PipeType;
@@ -10,19 +10,17 @@ import net.minecraft.util.Direction;
 import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.energy.CapabilityEnergy;
 import tesseract.Tesseract;
 import tesseract.api.capability.TesseractGTCapability;
+import tesseract.api.gt.IEnergyHandler;
 import tesseract.api.gt.IGTCable;
 
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
-import java.util.Arrays;
+public class TileEntityCable<T extends PipeType<T>> extends TileEntityPipe<T> implements IGTCable, Dispatch.Sided<IEnergyHandler> {
 
-public class TileEntityCable extends TileEntityPipe implements IGTCable {
-
-    public TileEntityCable(PipeType<?> type) {
-        super(type);
-        SIDE_CAPS = Arrays.stream(Ref.DIRS).map(t -> LazyOptional.of(() -> new TesseractGTCapability(this, t))).toArray(LazyOptional[]::new);
+    public TileEntityCable(T type, boolean covered) {
+        super(type, covered);
+        pipeCapHolder.set(() -> this);
     }
 
     @Override
@@ -58,7 +56,7 @@ public class TileEntityCable extends TileEntityPipe implements IGTCable {
 
     @Override
     public boolean validateTile(TileEntity tile, Direction side) {
-        return tile instanceof TileEntityCable || tile.getCapability(TesseractGTCapability.ENERGY_HANDLER_CAPABILITY, side).isPresent();
+        return tile instanceof TileEntityCable || tile.getCapability(TesseractGTCapability.ENERGY_HANDLER_CAPABILITY, side).isPresent() || tile.getCapability(CapabilityEnergy.ENERGY, side).isPresent();
     }
 
     @Override
@@ -86,10 +84,21 @@ public class TileEntityCable extends TileEntityPipe implements IGTCable {
         return canConnect(direction.getIndex());
     }
 
-    public static class TileEntityCoveredCable extends TileEntityCable implements ITickablePipe {
+    @Override
+    public LazyOptional<? extends IEnergyHandler> forSide(Direction side) {
+        return LazyOptional.of(() -> new TesseractGTCapability(this, side));
+    }
 
-        public TileEntityCoveredCable(PipeType<?> type) {
-            super(type);
+    @Override
+    public void refresh() {
+
+    }
+
+
+    public static class TileEntityCoveredCable<T extends Cable<T>> extends TileEntityCable<T> implements ITickablePipe {
+
+        public TileEntityCoveredCable(T type) {
+            super(type, true);
         }
 
         @Override

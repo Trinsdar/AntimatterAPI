@@ -2,14 +2,18 @@ package muramasa.antimatter.gui.screen;
 
 import com.mojang.blaze3d.matrix.MatrixStack;
 import com.mojang.blaze3d.systems.RenderSystem;
+import muramasa.antimatter.Ref;
+import muramasa.antimatter.capability.FluidHandler;
 import muramasa.antimatter.capability.machine.MachineRecipeHandler;
 import muramasa.antimatter.client.RenderHelper;
 import muramasa.antimatter.gui.ButtonData;
+import muramasa.antimatter.gui.GuiData;
 import muramasa.antimatter.gui.SlotData;
 import muramasa.antimatter.gui.container.ContainerMachine;
 import muramasa.antimatter.gui.slot.SlotFakeFluid;
 import muramasa.antimatter.integration.jei.AntimatterJEIPlugin;
 import muramasa.antimatter.machine.MachineFlag;
+import muramasa.antimatter.tile.TileEntityMachine;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.FontRenderer;
 import net.minecraft.client.gui.IHasContainer;
@@ -35,13 +39,13 @@ import static muramasa.antimatter.gui.SlotType.FL_IN;
 import static muramasa.antimatter.gui.SlotType.FL_OUT;
 
 // TODO - recipe stuff only when tile.getMachineType().has(MachineFlag.RECIPE)
-public class ScreenMachine<T extends ContainerMachine> extends AntimatterContainerScreen<T> implements IHasContainer<T> {
+public class ScreenMachine<T extends TileEntityMachine<T>, U extends ContainerMachine<T>> extends AntimatterContainerScreen<U> implements IHasContainer<U> {
 
-    protected T container;
+    protected U container;
     protected String name;
     protected ResourceLocation gui;
 
-    public ScreenMachine(T container, PlayerInventory inv, ITextComponent name) {
+    public ScreenMachine(U container, PlayerInventory inv, ITextComponent name) {
         super(container, inv, name);
         this.container = container;
         this.name = name.getString();
@@ -68,7 +72,7 @@ public class ScreenMachine<T extends ContainerMachine> extends AntimatterContain
     protected void drawGuiContainerForegroundLayer(MatrixStack stack, int mouseX, int mouseY) {
         drawTitle(stack, mouseX, mouseY);
         if (container.getTile().has(MachineFlag.RECIPE)) {
-            drawTooltipInArea(stack,"Show Recipes", mouseX, mouseY, (xSize / 2) - 10, 24, 20, 14);
+            drawTooltipInArea(stack,"Show Recipes", mouseX, mouseY, container.getTile().getMachineType().getGui().getProgress().x, container.getTile().getMachineType().getGui().getProgress().y, container.getTile().getMachineType().getGui().getProgress().z, container.getTile().getMachineType().getGui().getProgress().w);
         }
         if (container.getTile().has(MachineFlag.FLUID)) {
             //TODO
@@ -99,7 +103,7 @@ public class ScreenMachine<T extends ContainerMachine> extends AntimatterContain
         if (slot instanceof SlotFakeFluid) {
             SlotFakeFluid fl = (SlotFakeFluid) slot;
             container.getTile().fluidHandler.ifPresent(t -> {
-                FluidStack stack = t.getFluidInTank(fl.getSlotIndex());
+                FluidStack stack = fl.dir == FluidHandler.FluidDirection.INPUT ? t.getInputTanks().getFluidInTank(fl.getSlotIndex()) : t.getOutputTanks().getFluidInTank(fl.getSlotIndex());
                 if (!stack.isEmpty()) {
                     AntimatterJEIPlugin.uses(stack,input.getTranslationKey().equals("key.keyboard.u"));
                 }
@@ -139,7 +143,7 @@ public class ScreenMachine<T extends ContainerMachine> extends AntimatterContain
     @Override
     public void render(MatrixStack stack, int mouseX, int mouseY, float partialTicks) {
         super.render(stack, mouseX, mouseY, partialTicks);
-        //container.getTile().drawInfo(stack, Minecraft.getInstance().fontRenderer, guiLeft, guiTop);
+        container.getTile().drawInfo(stack, Minecraft.getInstance().fontRenderer, guiLeft, guiTop);
     }
 
     @Override
@@ -148,15 +152,57 @@ public class ScreenMachine<T extends ContainerMachine> extends AntimatterContain
     }
 
     protected void drawProgress(MatrixStack stack, float partialTicks, int mouseX, int mouseY) {
-        int progressTime = (int) (20 * container.getTile().recipeHandler.map(MachineRecipeHandler::getClientProgress).orElse(0F));
-        drawTexture(stack, gui, guiLeft + (xSize / 2) - 10, guiTop + 24, xSize, 0, progressTime, 18);
+        GuiData data = container.getTile().getMachineType().getGui();
+
+        if (container.getTile().recipeHandler.map(MachineRecipeHandler::getClientProgressRaw).orElse(0) <= 0){
+            return;
+        }
+        int x = data.getProgress().x, y = data.getProgress().y, xLocation = data.getProgressLocation().x, yLocation = data.getProgressLocation().y, length = data.getProgress().z, width = data.getProgress().w;
+        int progressTime;
+        switch (data.getDir()){
+            case TOP:
+                progressTime = (int) (data.getProgress().w * container.getTile().recipeHandler.map(MachineRecipeHandler::getClientProgress).orElse(0F));
+                if (!data.isBarFill()) {
+                    progressTime = width - progressTime;
+                }
+                y = (y + width) - progressTime;
+                yLocation = (yLocation + width) - progressTime;
+                width = progressTime;
+                break;
+            case LEFT:
+                progressTime = (int) (data.getProgress().z * container.getTile().recipeHandler.map(MachineRecipeHandler::getClientProgress).orElse(0F));
+                if (data.isBarFill()){
+                    length = progressTime;
+                } else {
+                    length = length - progressTime;
+                }
+                break;
+            case BOTTOM:
+                progressTime = (int) (data.getProgress().w * container.getTile().recipeHandler.map(MachineRecipeHandler::getClientProgress).orElse(0F));
+                if (data.isBarFill()){
+                    width = progressTime;
+                } else {
+                    width = width - progressTime;
+                }
+                break;
+            default:
+                progressTime = (int) (data.getProgress().z * container.getTile().recipeHandler.map(MachineRecipeHandler::getClientProgress).orElse(0F));
+                if (!data.isBarFill()) {
+                    progressTime = length - progressTime;
+                }
+                x = (x + length) - progressTime;
+                xLocation = (xLocation + length) - progressTime;
+                length = progressTime;
+                break;
+        }
+        drawTexture(stack, gui, guiLeft + x, guiTop + y, xLocation, yLocation, length, width);
     }
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int mouseButton) {
         super.mouseClicked(mouseX, mouseY, mouseButton);
-        if (!ModList.get().isLoaded("jei") || !container.getTile().has(MachineFlag.RECIPE)) return false;
-        if (isInGui((xSize / 2) - 10, 24, 20, 18, mouseX, mouseY)) {
+        if ((!ModList.get().isLoaded(Ref.MOD_JEI) && !ModList.get().isLoaded(Ref.MOD_REI)) || !container.getTile().has(MachineFlag.RECIPE)) return false;
+        if (isInGui(container.getTile().getMachineType().getGui().getProgress().x, container.getTile().getMachineType().getGui().getProgress().y, container.getTile().getMachineType().getGui().getProgress().z, container.getTile().getMachineType().getGui().getProgress().w, mouseX, mouseY)) {
             AntimatterJEIPlugin.showCategory(container.getTile().getMachineType());
             return true;
         }

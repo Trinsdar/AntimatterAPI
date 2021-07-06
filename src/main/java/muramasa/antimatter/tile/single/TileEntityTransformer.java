@@ -14,14 +14,15 @@ import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.BlockRayTraceResult;
 import net.minecraft.util.text.StringTextComponent;
 import net.minecraft.world.World;
-import net.minecraftforge.common.util.LazyOptional;
+import tesseract.api.capability.TesseractGTCapability;
 
 import java.util.List;
 import java.util.function.IntToLongFunction;
 
 import static muramasa.antimatter.Data.HAMMER;
+import static muramasa.antimatter.Data.SOFT_HAMMER;
 
-public class TileEntityTransformer extends TileEntityMachine {
+public class TileEntityTransformer<T extends TileEntityTransformer<T>> extends TileEntityMachine<T> {
 
     protected int voltage, amperage;
     protected IntToLongFunction capFunc;
@@ -34,7 +35,7 @@ public class TileEntityTransformer extends TileEntityMachine {
         super(type);
         this.amperage = amps;
         this.capFunc = capFunc;
-        this.energyHandler = LazyOptional.of(() -> new MachineEnergyHandler<TileEntityMachine>(this, 0L, capFunc.applyAsLong(getMachineTier().getVoltage()), getMachineTier().getVoltage() * 4, getMachineTier().getVoltage(), amperage, amperage * 4)  {
+        energyHandler.set(() -> new MachineEnergyHandler<T>((T)this, 0L, capFunc.applyAsLong(getMachineTier().getVoltage()), getMachineTier().getVoltage() * 4, getMachineTier().getVoltage(), amperage, amperage * 4)  {
             @Override
             public boolean canOutput(Direction direction) {
                 return isDefaultMachineState() == (tile.getFacing().getIndex() != direction.getIndex());
@@ -72,7 +73,7 @@ public class TileEntityTransformer extends TileEntityMachine {
 
     @Override
     public ActionResultType onInteract(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockRayTraceResult hit, AntimatterToolType type) {
-        if (type == HAMMER && hand == Hand.MAIN_HAND) {
+        if (type == SOFT_HAMMER && hand == Hand.MAIN_HAND) {
             toggleMachine();
             energyHandler.ifPresent(h -> {
                 int temp = h.getOutputAmperage();
@@ -81,7 +82,7 @@ public class TileEntityTransformer extends TileEntityMachine {
                 temp = h.getOutputVoltage();
                 h.setOutputVoltage(h.getInputVoltage());
                 h.setInputVoltage(temp);
-                h.refreshNet();
+                this.refreshCap(TesseractGTCapability.ENERGY_HANDLER_CAPABILITY);
                 player.sendMessage(new StringTextComponent((isDefaultMachineState() ? "Step Down, In: " : "Step Up, In") + h.getInputVoltage() + "V@" + h.getInputAmperage() + "Amp, Out: " + h.getOutputVoltage() + "V@" + h.getOutputAmperage() + "Amp"), player.getUniqueID());
             });
             return ActionResultType.SUCCESS;

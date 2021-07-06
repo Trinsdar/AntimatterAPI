@@ -3,7 +3,7 @@ package muramasa.antimatter.tile;
 import net.minecraft.tileentity.ITickableTileEntity;
 import net.minecraft.tileentity.TileEntityType;
 
-public class TileEntityTickable extends TileEntityBase implements ITickableTileEntity {
+public class TileEntityTickable<T extends TileEntityTickable<T>> extends TileEntityBase<T> implements ITickableTileEntity {
 
     private boolean hadFirstTick;
 
@@ -13,6 +13,7 @@ public class TileEntityTickable extends TileEntityBase implements ITickableTileE
 
     @Override
     public void tick() {
+        world.getProfiler().startSection("AntimatterTileTick");
         if (!hadFirstTick) {
             onFirstTick();
             hadFirstTick = true;
@@ -21,6 +22,7 @@ public class TileEntityTickable extends TileEntityBase implements ITickableTileE
         } else {
             onClientUpdate();
         }
+        world.getProfiler().endSection();
         //requestModelDataUpdate();
     }
 

@@ -1,37 +1,46 @@
 package muramasa.antimatter.tile.multi;
 
-import muramasa.antimatter.Antimatter;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import muramasa.antimatter.AntimatterConfig;
 import muramasa.antimatter.capability.AntimatterCaps;
 import muramasa.antimatter.capability.IComponentHandler;
 import muramasa.antimatter.capability.machine.ControllerComponentHandler;
-import muramasa.antimatter.capability.machine.MachineRecipeHandler;
+import muramasa.antimatter.cover.CoverDynamo;
+import muramasa.antimatter.cover.CoverEnergy;
+import muramasa.antimatter.cover.CoverInput;
+import muramasa.antimatter.cover.ICover;
 import muramasa.antimatter.machine.MachineState;
 import muramasa.antimatter.machine.types.Machine;
 import muramasa.antimatter.registration.IAntimatterObject;
-import muramasa.antimatter.structure.IComponent;
-import muramasa.antimatter.structure.Structure;
-import muramasa.antimatter.structure.StructureCache;
-import muramasa.antimatter.structure.StructureResult;
+import muramasa.antimatter.structure.*;
 import muramasa.antimatter.tile.TileEntityMachine;
 import muramasa.antimatter.util.Utils;
 import net.minecraft.block.BlockState;
 import net.minecraft.nbt.CompoundNBT;
 import net.minecraft.util.Direction;
+import net.minecraft.util.math.BlockPos;
 import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.util.LazyOptional;
+import tesseract.api.capability.TesseractGTCapability;
 
 import javax.annotation.Nonnull;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+
+import static net.minecraftforge.fluids.capability.CapabilityFluidHandler.FLUID_HANDLER_CAPABILITY;
+import static net.minecraftforge.items.CapabilityItemHandler.ITEM_HANDLER_CAPABILITY;
 
 /** Allows a MultiMachine to handle GUI recipes, instead of using Hatches **/
-public class TileEntityBasicMultiMachine extends TileEntityMachine implements IComponent {
+public class TileEntityBasicMultiMachine<T extends TileEntityBasicMultiMachine<T>> extends TileEntityMachine<T> implements IComponent {
 
+    private final Set<StructureHandle<?>> allHandlers = new ObjectOpenHashSet<>();
     protected StructureResult result = null;
 
     /** To ensure proper load from disk, do not check if INVALID_STRUCTURE is loaded from disk. **/
     protected boolean shouldCheckFirstTick = true;
+    //Number of calls into checkStructure, invalidateStructure. if > 0 ignore callbacks from structurecache.
+    private int checkingStructure = 0;
 
     protected final LazyOptional<ControllerComponentHandler> componentHandler = LazyOptional.of(() -> new ControllerComponentHandler(this));
 
@@ -42,7 +51,10 @@ public class TileEntityBasicMultiMachine extends TileEntityMachine implements IC
     @Override
     public void onRemove() {
         super.onRemove();
+        //Remove handlers from the structure cache.
+        allHandlers.forEach(StructureHandle::deregister);
         invalidateStructure();
+        StructureCache.remove(world, pos);
     }
 
     /**
@@ -55,9 +67,12 @@ public class TileEntityBasicMultiMachine extends TileEntityMachine implements IC
 
     @Override
     public void onFirstTick() {
+        //Register handlers to the structure cache.
+        allHandlers.forEach(StructureHandle::register);
         //if INVALID_STRUCTURE was stored to disk don't bother rechecking on first tick.
         //This is not only behavioural but if INVALID_STRUCTURE are checked then maxShares
         //might misbehave.
+        StructureCache.add(world, pos, getMachineType().getStructure(getMachineTier()).getStructure(this));
         if (!isStructureValid() && shouldCheckFirstTick) {
             checkStructure();
         }
@@ -67,23 +82,20 @@ public class TileEntityBasicMultiMachine extends TileEntityMachine implements IC
     public boolean checkStructure() {
         Structure structure = getMachineType().getStructure(getMachineTier());
         if (structure == null) return false;
+        checkingStructure++;
         StructureResult result = structure.evaluate(this);
         if (result.evaluate()) {
-            if (StructureCache.add(world, pos, result.positions, maxShares())) {
+            if (StructureCache.validate(world, pos, result.positions, maxShares())) {
                 this.result = result;
                 if (isServerSide()) {
+                    result.build(this, result);
                     if (onStructureFormed()) {
                         afterStructureFormed();
                         setMachineState(MachineState.IDLE);
-                        Antimatter.LOGGER.info("[Structure Debug] Valid Structure");
-                        if (hadFirstTick()) this.recipeHandler.ifPresent(t -> {
-                            if (t.hasRecipe())
-                                setMachineState(MachineState.NO_POWER);
-                            else {
-                                t.checkRecipe();
-                            }
-                        });
+                        //Antimatter.LOGGER.info("[Structure Debug] Valid Structure");
+                        this.recipeHandler.ifPresent(t -> t.onMultiBlockStateChange(true, AntimatterConfig.COMMON_CONFIG.INPUT_RESET_MULTIBLOCK.get()));
                         sidedSync(true);
+                        checkingStructure--;
                         return true;
                     }
                 } else {
@@ -91,51 +103,82 @@ public class TileEntityBasicMultiMachine extends TileEntityMachine implements IC
                         Utils.markTileForRenderUpdate(c.getTile());
                     }));
                     sidedSync(true);
+                    checkingStructure--;
                     return true;
                 }
             }
         } else {
-            invalidateStructure();
+           //Antimatter.LOGGER.info("[Structure Debug] Error " + result.getError());
         }
+        //if we reached here something went wrong.
+        invalidateStructure();
+        checkingStructure--;
         return false;
     }
 
     @Override
-    public boolean setFacing(Direction side) {
-        boolean ok = super.setFacing(side);
-        if (ok) {
-            checkStructure();
-        }
-        return ok;
+    public void onServerUpdate() {
+        super.onServerUpdate();
+        if (result != null) result.tick(this);
     }
 
-    public void invalidateStructure() {
+    public <T> LazyOptional<T> getCapabilityFromFake(Capability<T> cap, BlockPos pos, Direction side, ICover coverPresent) {
+        if (cap == ITEM_HANDLER_CAPABILITY && itemHandler.isPresent() && (coverPresent instanceof CoverInput)) return itemHandler.side(side).cast();
+        else if (cap == FLUID_HANDLER_CAPABILITY && fluidHandler.isPresent() && (coverPresent instanceof CoverInput)) return fluidHandler.side(side).cast();
+        else if (cap == TesseractGTCapability.ENERGY_HANDLER_CAPABILITY && energyHandler.isPresent() && (coverPresent instanceof CoverDynamo || coverPresent instanceof CoverEnergy)) return energyHandler.side(side).cast();
+        return LazyOptional.empty();
+    }
+    
+    @Override
+    public void onBlockUpdate(BlockPos pos) {
+        if (checkingStructure > 0) return;
+        if (result != null) {
+            if (!getMachineType().getStructure(getMachineTier()).evaluatePosition(result,this, pos)) {
+                invalidateStructure();
+            }
+        } else {
+            checkStructure();
+        }
+    }
+
+    @Override
+    public void setMachineState(MachineState newState) {
+        super.setMachineState(newState);
+        if (result != null)
+            result.updateState(this, result);
+    }
+
+    @Override
+    public void updateContainingBlockInfo() {
+        BlockState old = this.getBlockState();
+        super.updateContainingBlockInfo();
+        BlockState newState = this.getBlockState();
+        if (!old.equals(newState)) checkStructure();
+    }
+
+    protected void invalidateStructure() {
         if (removed) return;
-        if (result == null) return;
-        StructureCache.remove(this.getWorld(), getPos());
+        if (result == null) {
+            if (isServerSide() && getMachineState() != getDefaultMachineState()) {
+                resetMachine();
+            }
+            return;
+        }
+        checkingStructure++;
+        StructureCache.invalidate(this.getWorld(), getPos(), getMachineType().getStructure(getMachineTier()).getStructure(this));
         if (isServerSide()) {
             onStructureInvalidated();
+            result.remove(this, result);
             result = null;
-            resetMachine();
+            recipeHandler.ifPresent(t -> t.onMultiBlockStateChange(false, AntimatterConfig.COMMON_CONFIG.INPUT_RESET_MULTIBLOCK.get()));
             //Hard mode, remove recipe progress.
-            if (AntimatterConfig.COMMON_CONFIG.INPUT_RESET_MULTIBLOCK.get()) {
-                recipeHandler.ifPresent(MachineRecipeHandler::resetRecipe);
-            }
         } else {
             this.result.components.forEach((k, v) -> v.forEach(c -> {
                 Utils.markTileForRenderUpdate(c.getTile());
             }));
             result = null;
         }
-    }
-
-    @Override
-    public void onServerUpdate() {
-        super.onServerUpdate();
-        if (result == null && world != null && world.getGameTime() % 200 == 0) {
-            //Uncomment to periodically check structure.
-            // checkStructure();
-        }
+        checkingStructure--;
     }
 
     /** Returns a list of Components **/
@@ -161,6 +204,11 @@ public class TileEntityBasicMultiMachine extends TileEntityMachine implements IC
 
     public boolean isStructureValid() {
         return StructureCache.has(world, pos);
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
     }
 
     /** Events **/
@@ -203,5 +251,9 @@ public class TileEntityBasicMultiMachine extends TileEntityMachine implements IC
         if (getMachineState() == MachineState.INVALID_STRUCTURE) {
             shouldCheckFirstTick = false;
         }
+    }
+
+    public void addStructureHandle(StructureHandle<?> handle) {
+        this.allHandlers.add(handle);
     }
 }

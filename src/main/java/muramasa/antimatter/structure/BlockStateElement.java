@@ -1,11 +1,12 @@
 package muramasa.antimatter.structure;
 
-import muramasa.antimatter.tile.TileEntityMachine;
+import muramasa.antimatter.tile.multi.TileEntityBasicMultiMachine;
 import muramasa.antimatter.util.int3;
 import net.minecraft.block.BlockState;
 
 public class BlockStateElement extends StructureElement {
 
+    public static BlockStateElement AIR = new BlockStateElement("air", (r, p, s) -> s.isAir(r, p)); //Air check
     protected IBlockStatePredicate predicate;
 
     public BlockStateElement(String elementId, IBlockStatePredicate predicate) {
@@ -18,7 +19,7 @@ public class BlockStateElement extends StructureElement {
     }
 
     @Override
-    public boolean evaluate(TileEntityMachine machine, int3 pos, StructureResult result) {
+    public boolean evaluate(TileEntityBasicMultiMachine<?> machine, int3 pos, StructureResult result) {
         BlockState state = machine.getWorld().getBlockState(pos);
         if (predicate.evaluate(machine.getWorld(), pos, state)) {
             result.addState(elementId, pos, state);

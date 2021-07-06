@@ -46,14 +46,6 @@ public class JEIMaterialRecipeExtension implements ICustomCraftingCategoryExtens
     public void setRecipe(IRecipeLayout recipeLayout, IIngredients ingredients) {
         IGuiItemStackGroup guiItemStacks = recipeLayout.getItemStacks();
         IFocus<?> focus = recipeLayout.getFocus();
-        guiItemStacks.init(craftOutputSlot, false, 94, 18);
-
-        for (int y = 0; y < 3; ++y) {
-            for (int x = 0; x < 3; ++x) {
-                int index = craftInputSlot1 + x + (y * 3);
-                guiItemStacks.init(index, true, x * 18, y * 18);
-            }
-        }
 
         List<List<ItemStack>> inputs = ingredients.getInputs(VanillaTypes.ITEM);
         List<List<ItemStack>> newInputs = new ObjectArrayList<>(inputs);
@@ -145,7 +137,7 @@ public class JEIMaterialRecipeExtension implements ICustomCraftingCategoryExtens
             if (!b) {
                 Map<String, Object> o = recipe.builder.getFromResult(c);
                 d.add(new StringTextComponent("Properties:").mergeStyle(TextFormatting.GOLD));
-                o.forEach((k,v) -> d.add(new StringTextComponent(k.substring(0,1).toUpperCase() + k.substring(1)).append(new StringTextComponent(" - " + v.toString()))));
+                o.forEach((k,v) -> d.add(new StringTextComponent(k.substring(0,1).toUpperCase() + k.substring(1)).appendSibling(new StringTextComponent(" - " + v.toString()))));
             }
         });
         helper.setInputs(guiItemStacks, shouldReplace ? newInputs : inputs, recipe.getWidth(), recipe.getHeight());

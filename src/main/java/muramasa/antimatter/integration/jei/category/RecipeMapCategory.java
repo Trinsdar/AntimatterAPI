@@ -19,6 +19,7 @@ import muramasa.antimatter.gui.SlotData;
 import muramasa.antimatter.gui.SlotType;
 import muramasa.antimatter.integration.jei.renderer.IRecipeInfoRenderer;
 import muramasa.antimatter.machine.BlockMachine;
+import muramasa.antimatter.machine.BlockMultiMachine;
 import muramasa.antimatter.machine.Tier;
 import muramasa.antimatter.recipe.Recipe;
 import muramasa.antimatter.recipe.ingredient.RecipeIngredient;
@@ -29,6 +30,7 @@ import net.minecraft.block.Block;
 import net.minecraft.client.Minecraft;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.crafting.Ingredient;
+import net.minecraft.util.IItemProvider;
 import net.minecraft.util.ResourceLocation;
 import net.minecraft.util.text.StringTextComponent;
 import net.minecraft.util.text.TextFormatting;
@@ -60,8 +62,22 @@ public class RecipeMapCategory implements IRecipeCategory<Recipe> {
         int4 padding = gui.getPadding(), area = gui.getArea(), progress = gui.getDir().getUV();
         background = guiHelper.drawableBuilder(gui.getTexture(guiTier,"machine"), area.x, area.y, area.z, area.w).addPadding(padding.x, padding.y, padding.z, padding.w).build();
         progressBar = guiHelper.drawableBuilder(gui.getTexture(guiTier,"machine"), progress.x, progress.y, progress.z, progress.w).buildAnimated(50, IDrawableAnimated.StartDirection.LEFT, false);
-        Block block = AntimatterAPI.get(BlockMachine.class, blockItemModel == null ? "" : blockItemModel + "_" + defaultTier.getId());
-        icon = block == null ? guiHelper.createDrawableIngredient(new ItemStack(Data.DEBUG_SCANNER,1)) : guiHelper.createDrawableIngredient(new ItemStack(block.asItem(),1));
+        Object icon = map.getIcon();
+        if (icon != null) {
+            if (icon instanceof ItemStack) {
+                this.icon = guiHelper.createDrawableIngredient((ItemStack)icon);
+            }
+            if (icon instanceof IItemProvider) {
+                this.icon = guiHelper.createDrawableIngredient(new ItemStack((IItemProvider)icon));
+            }
+            if (icon instanceof IDrawable) {
+                this.icon = (IDrawable) icon;
+            }
+        } else {
+            Block block = AntimatterAPI.get(BlockMachine.class, blockItemModel == null ? "" : blockItemModel + "_" + defaultTier.getId());
+            if (block == null) block = AntimatterAPI.get(BlockMultiMachine.class, blockItemModel == null ? "" : blockItemModel + "_" + defaultTier.getId());
+            this.icon = block == null ? guiHelper.createDrawableIngredient(new ItemStack(Data.DEBUG_SCANNER,1)) : guiHelper.createDrawableIngredient(new ItemStack(block.asItem(),1));        
+        }
         this.gui = gui;
         this.infoRenderer = map.getInfoRenderer();
     }
@@ -123,7 +139,7 @@ public class RecipeMapCategory implements IRecipeCategory<Recipe> {
     public void setRecipe(IRecipeLayout layout, Recipe recipe, @Nonnull IIngredients ingredients) {
         IGuiItemStackGroup itemGroup = layout.getItemStacks();
         IGuiFluidStackGroup fluidGroup = layout.getFluidStacks();
-        List<SlotData> slots;
+        List<SlotData<?>> slots;
         int groupIndex = 0, slotCount;
         int offsetX = gui.getArea().x + JEI_OFFSET_X, offsetY = gui.getArea().y + JEI_OFFSET_Y;
         int inputItems = 0, inputFluids = 0;
@@ -197,10 +213,13 @@ public class RecipeMapCategory implements IRecipeCategory<Recipe> {
                     if (recipe.getInputItems().size() >= index && recipe.getInputItems().get(index).ignoreConsume()) {
                         tooltip.add(new StringTextComponent("Does not get consumed in the process.").mergeStyle(TextFormatting.WHITE));
                     }
+                    if (recipe.getInputItems().size() >= index && recipe.getInputItems().get(index).ignoreNbt()) {
+                        tooltip.add(new StringTextComponent("Ignores NBT.").mergeStyle(TextFormatting.WHITE));
+                    }
                     if (recipe.getInputItems().size() >= index) {
                         Ingredient i = recipe.getInputItems().get(index).get();
                         if (RecipeMap.isIngredientSpecial(i)) {
-                            tooltip.add(new StringTextComponent("Special ingredient. Class name: ").mergeStyle(TextFormatting.GRAY).append(new StringTextComponent(i.getClass().getSimpleName()).mergeStyle(TextFormatting.GOLD)));
+                            tooltip.add(new StringTextComponent("Special ingredient. Class name: ").mergeStyle(TextFormatting.GRAY).appendSibling(new StringTextComponent(i.getClass().getSimpleName()).mergeStyle(TextFormatting.GOLD)));
                         }
                     }
                 }

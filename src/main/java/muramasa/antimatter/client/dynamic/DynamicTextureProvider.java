@@ -80,7 +80,7 @@ public class DynamicTextureProvider<T extends IDynamicModelProvider,U> {
     private List<BakedQuad>[] bakeQuads(BlockState state, T c, U key, IModelData data) {
         List<BakedQuad>[] bakedArray = new List[Ref.DIRS.length];
         for (Direction dir : Ref.DIRS) {
-            IUnbakedModel m = ModelLoader.instance().getUnbakedModel(c.getModel(dir,state.hasProperty(BlockStateProperties.HORIZONTAL_FACING) ? state.get(BlockStateProperties.HORIZONTAL_FACING) : dir));
+            IUnbakedModel m = ModelLoader.instance().getUnbakedModel(c.getModel(dir, dirFromState(state, dir)));
             if (m instanceof BlockModel) {
                 BlockModel bm = (BlockModel) m;
                 texturer.accept(new ModelData(bm, dir, data,c, key));
@@ -88,5 +88,11 @@ public class DynamicTextureProvider<T extends IDynamicModelProvider,U> {
             bakedArray[dir.getIndex()] = builder.apply(new BuilderData(Ref.RNG, state, data, c,key, m, dir));
         }
         return bakedArray;
+    }
+
+    private static Direction dirFromState(BlockState state, Direction bypass) {
+        if (state.hasProperty(BlockStateProperties.FACING)) return state.get(BlockStateProperties.FACING);
+        if (state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) return state.get(BlockStateProperties.HORIZONTAL_FACING);
+        return bypass;
     }
 }

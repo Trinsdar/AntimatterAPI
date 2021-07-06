@@ -97,6 +97,10 @@ public class RecipeIngredient {
         return this;
     }
 
+    public boolean ignoreNbt() {
+        return ignoreNbt;
+    }
+
     public Ingredient get() {
         Ingredient v = value.getValue();
         if (!setStacks) {
@@ -142,7 +146,7 @@ public class RecipeIngredient {
     }
 
     private static ITag<Item> collectTag(ResourceLocation loc) {
-        ITagCollectionSupplier getter = TagUtils.TAG_GETTER;
+        ITagCollectionSupplier getter = TagUtils.getSupplier();
         if (getter == null){
             return TagUtils.nc(loc);
         }

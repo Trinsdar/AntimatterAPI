@@ -2,31 +2,41 @@ package muramasa.antimatter.capability.machine;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import muramasa.antimatter.Ref;
+import muramasa.antimatter.capability.Dispatch;
 import muramasa.antimatter.capability.EnergyHandler;
 import muramasa.antimatter.capability.IMachineHandler;
 import muramasa.antimatter.machine.event.ContentEvent;
 import muramasa.antimatter.machine.event.IMachineEvent;
 import muramasa.antimatter.machine.event.MachineEvent;
+import muramasa.antimatter.tesseract.EnergyTileWrapper;
 import muramasa.antimatter.tile.TileEntityMachine;
 import muramasa.antimatter.util.Utils;
 import net.minecraft.tileentity.TileEntity;
 import net.minecraft.util.Direction;
 import net.minecraft.world.Explosion;
+import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.energy.CapabilityEnergy;
+import net.minecraftforge.energy.IEnergyStorage;
 import tesseract.Tesseract;
 import tesseract.api.capability.TesseractGTCapability;
 import tesseract.api.gt.IEnergyHandler;
 
+import java.util.Arrays;
 import java.util.List;
 
-public class MachineEnergyHandler<T extends TileEntityMachine> extends EnergyHandler implements IMachineHandler{
+public class MachineEnergyHandler<T extends TileEntityMachine<T>> extends EnergyHandler implements IMachineHandler, Dispatch.Sided<IEnergyHandler> {
 
     protected final T tile;
 
     protected List<IEnergyHandler> cachedItems = new ObjectArrayList<>();
+    protected int offsetInsert = 0;
+    protected int offsetExtract = 0;
+    private final List<LazyOptional<IEnergyHandler>> cache = new ObjectArrayList<>(6);
 
     public MachineEnergyHandler(T tile, long energy, long capacity, int voltageIn, int voltageOut, int amperageIn, int amperageOut) {
         super(energy, capacity, voltageIn, voltageOut, amperageIn, amperageOut);
         this.tile = tile;
+        Arrays.stream(Ref.DIRS).forEach(dir -> cache.add(LazyOptional.empty()));
     }
 
     public MachineEnergyHandler(T tile, boolean isGenerator) {
@@ -75,14 +85,34 @@ public class MachineEnergyHandler<T extends TileEntityMachine> extends EnergyHan
     public void onUpdate() {
         super.onUpdate();
         cachedItems.forEach(t -> t.getState().onTick());
+        cache.forEach(v -> v.ifPresent(t -> {
+            if (t instanceof EnergyTileWrapper) {
+                t.tesseractTick();
+            }
+        }));
         for (Direction dir : Ref.DIRS) {
-            if (canOutput(Ref.DIRS[dir.getIndex()])) {
-                if (!getState().extract(true, 1, 0)) {
-                    break;
+            if (canOutput(dir)) {
+                LazyOptional<IEnergyHandler> handle = cache.get(dir.getIndex());
+                if (!handle.isPresent()) {
+                    TileEntity tile = this.tile.getWorld().getTileEntity(this.tile.getPos().offset(dir));
+                    if (tile == null) continue;
+                    handle = tile.getCapability(TesseractGTCapability.ENERGY_HANDLER_CAPABILITY, dir.getOpposite());
+                    if (!handle.isPresent()) {
+                        LazyOptional<IEnergyStorage> cap = tile.getCapability(CapabilityEnergy.ENERGY, dir.getOpposite());
+                        if (!cap.isPresent()) continue;
+                        handle = LazyOptional.of(() -> new EnergyTileWrapper(tile, cap.orElse(null)));
+                        LazyOptional<IEnergyHandler> finalHandle = handle;
+                        cap.addListener(list -> finalHandle.invalidate());
+                    }
+                    cache.add(dir.getIndex(), handle);
+                    handle.addListener(h -> cache.add(dir.getIndex(), LazyOptional.empty()));
                 }
-                TileEntity tile = this.tile.getWorld().getTileEntity(this.tile.getPos().offset(dir));
-                if (tile != null) {
-                    tile.getCapability(TesseractGTCapability.ENERGY_HANDLER_CAPABILITY, dir.getOpposite()).ifPresent(eh -> Utils.transferEnergy(this, eh));
+                boolean ok = true;
+                while(ok) {
+                    if (!getState().extract(true, 1, 0)) {
+                        break;
+                    }
+                    ok = handle.map(eh -> Utils.transferEnergy(this, eh)).orElse(false);
                 }
             }
         }
@@ -117,11 +147,17 @@ public class MachineEnergyHandler<T extends TileEntityMachine> extends EnergyHan
     }
 
     protected long insertIntoItems(long maxReceive, boolean simulate) {
-        for (IEnergyHandler handler : cachedItems) {
+        int j = 0;
+        for (int i = offsetInsert; j < cachedItems.size(); j++, i = (i == cachedItems.size() -1 ? 0 : (i+1))) {
+            IEnergyHandler handler = cachedItems.get(i);
             long inserted = handler.insert(maxReceive, true);
             if (inserted > 0) {
-                if (!simulate) handler.insert(maxReceive, false);
-                return inserted;
+                if (!simulate) {
+                    offsetInsert = offsetInsert == cachedItems.size() - 1 ? 0 : offsetInsert + 1;
+                    return handler.insert(maxReceive, false);
+                } else {
+                    return inserted;
+                }
             }
         }
         return 0;
@@ -150,10 +186,13 @@ public class MachineEnergyHandler<T extends TileEntityMachine> extends EnergyHan
     }
 
     protected long extractFromItems(long maxExtract, boolean simulate) {
-        for (IEnergyHandler handler : cachedItems) {
+        int j = 0;
+        for (int i = offsetExtract; j < cachedItems.size(); j++, i = (i == cachedItems.size() - 1 ? 0 : (i+1))) {
+            IEnergyHandler handler = cachedItems.get(i);
             long extracted = handler.extract(maxExtract, true);
             if (extracted > 0) {
                 if (!simulate) {
+                    offsetExtract = offsetExtract == cachedItems.size() - 1 ? 0 : offsetExtract + 1;
                     return handler.extract(maxExtract, false);
                 } else {
                     return extracted;
@@ -166,13 +205,23 @@ public class MachineEnergyHandler<T extends TileEntityMachine> extends EnergyHan
     @Override
     public void onMachineEvent(IMachineEvent event, Object... data) {
         if (event == ContentEvent.ENERGY_SLOT_CHANGED) {
-            tile.itemHandler.ifPresent(h -> cachedItems = h.getChargeableItems());
+            tile.itemHandler.ifPresent(h -> {
+                cachedItems = h.getChargeableItems();
+                offsetInsert = 0;
+                offsetExtract = 0;
+            });
             //refreshNet();
         }
     }
 
+
     @Override
-    public void refreshNet() {
-        Tesseract.GT_ENERGY.refreshNode(this.tile.getWorld(), this.tile.getPos().toLong());
+    public LazyOptional<IEnergyHandler> forSide(Direction side) {
+        return LazyOptional.of(() -> this);
+    }
+
+    @Override
+    public void refresh() {
+        Tesseract.GT_ENERGY.refreshNode(tile.getWorld(), tile.getPos().toLong());
     }
 }

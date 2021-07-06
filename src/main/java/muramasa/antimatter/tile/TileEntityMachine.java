@@ -1,12 +1,11 @@
 package muramasa.antimatter.tile;
 
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import muramasa.antimatter.AntimatterAPI;
 import muramasa.antimatter.AntimatterProperties;
 import muramasa.antimatter.Data;
 import muramasa.antimatter.Ref;
-import muramasa.antimatter.capability.EnergyHandler;
-import muramasa.antimatter.capability.IGuiHandler;
-import muramasa.antimatter.capability.IMachineHandler;
+import muramasa.antimatter.capability.*;
 import muramasa.antimatter.capability.machine.*;
 import muramasa.antimatter.client.dynamic.DynamicTexturer;
 import muramasa.antimatter.client.dynamic.DynamicTexturers;
@@ -51,13 +50,18 @@ import net.minecraftforge.client.model.data.IModelData;
 import net.minecraftforge.client.model.data.ModelDataMap;
 import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.util.LazyOptional;
+import net.minecraftforge.fluids.capability.IFluidHandler;
+import net.minecraftforge.items.IItemHandler;
 import tesseract.api.capability.TesseractGTCapability;
+import tesseract.api.gt.IEnergyHandler;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Set;
 
 import static muramasa.antimatter.capability.AntimatterCaps.COVERABLE_HANDLER_CAPABILITY;
+import static muramasa.antimatter.capability.AntimatterCaps.RECIPE_HANDLER_CAPABILITY;
 import static muramasa.antimatter.gui.event.GuiEvent.FLUID_EJECT;
 import static muramasa.antimatter.gui.event.GuiEvent.ITEM_EJECT;
 import static muramasa.antimatter.machine.MachineFlag.*;
@@ -65,23 +69,30 @@ import static net.minecraft.block.Blocks.AIR;
 import static net.minecraftforge.fluids.capability.CapabilityFluidHandler.FLUID_HANDLER_CAPABILITY;
 import static net.minecraftforge.items.CapabilityItemHandler.ITEM_HANDLER_CAPABILITY;
 
-public class TileEntityMachine extends TileEntityTickable implements INamedContainerProvider, IInfoRenderer, IMachineHandler, IGuiHandler, IDynamicModelProvider {
+public class TileEntityMachine<T extends TileEntityMachine<T>> extends TileEntityTickable<T> implements INamedContainerProvider, IInfoRenderer, IMachineHandler, IGuiHandler, IDynamicModelProvider {
 
     /** Open container. Allows for better syncing **/
-    @Nullable
-    protected Container openContainer;
+    protected final Set<ContainerMachine<T>> openContainers = new ObjectOpenHashSet<>();
 
     /** Machine Data **/
     protected Machine<?> type;
     protected Tier tier;
     protected MachineState machineState;
 
+    protected MachineState disabledState;
+
     /** Handlers **/
-    public LazyOptional<MachineItemHandler<?>> itemHandler;
+   /* public LazyOptional<MachineItemHandler<?>> itemHandler;
     public LazyOptional<MachineFluidHandler<?>> fluidHandler;
-    public LazyOptional<MachineEnergyHandler<?>> energyHandler;
-    public LazyOptional<MachineRecipeHandler<?>> recipeHandler;
-    public LazyOptional<MachineCoverHandler<TileEntityMachine>> coverHandler;
+    public LazyOptional<MachineEnergyHandler<T>> energyHandler;
+    public LazyOptional<MachineRecipeHandler<T>> recipeHandler;
+    public LazyOptional<MachineCoverHandler<TileEntityMachine>> coverHandler;*/
+
+    public Holder<IItemHandler, MachineItemHandler<T>> itemHandler = new Holder<>(ITEM_HANDLER_CAPABILITY, dispatch);
+    public Holder<IFluidHandler, MachineFluidHandler<T>> fluidHandler = new Holder<>(FLUID_HANDLER_CAPABILITY, dispatch);
+    public Holder<ICoverHandler, MachineCoverHandler<T>> coverHandler = new Holder<>(COVERABLE_HANDLER_CAPABILITY, dispatch);
+    public Holder<IEnergyHandler, MachineEnergyHandler<T>> energyHandler = new Holder<>(TesseractGTCapability.ENERGY_HANDLER_CAPABILITY, dispatch);
+    public Holder<MachineRecipeHandler, MachineRecipeHandler<T>> recipeHandler = new Holder<>(RECIPE_HANDLER_CAPABILITY, dispatch);
 
     /** Texture related areas. **/
     public LazyValue<DynamicTexturer<TileEntityMachine, DynamicKey>> multiTexturer;
@@ -90,25 +101,35 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         super(type.getTileType());
         this.type = type;
         this.machineState = getDefaultMachineState();
-        this.itemHandler = type.has(ITEM) || type.has(CELL) ? LazyOptional.of(() -> new MachineItemHandler<>(this)) : LazyOptional.empty();
-        this.fluidHandler = type.has(FLUID) ? LazyOptional.of(() -> new MachineFluidHandler<>(this)) : LazyOptional.empty();
-        this.energyHandler = type.has(ENERGY) ? LazyOptional.of(() -> new MachineEnergyHandler<>(this, type.amps(),type.has(GENERATOR))) : LazyOptional.empty();
-        this.recipeHandler = type.has(RECIPE) ? LazyOptional.of(() -> new MachineRecipeHandler<>(this)) : LazyOptional.empty();
-        this.coverHandler = type.has(COVERABLE) ? LazyOptional.of(() -> new MachineCoverHandler<>(this)) : LazyOptional.empty();
-        //lazy way to only runn on client.
+        if (type.has(ITEM) || type.has(CELL)) {
+            itemHandler.set(() -> new MachineItemHandler<>((T)this));
+        }
+        if (type.has(FLUID)) {
+            fluidHandler.set(() -> new MachineFluidHandler<>((T)this));
+        }
+        if (type.has(ENERGY)) {
+            energyHandler.set(() -> new MachineEnergyHandler<>((T)this,type.amps(),type.has(GENERATOR)));
+        }
+        if (type.has(RECIPE)) {
+            recipeHandler.set(() -> new MachineRecipeHandler<>((T)this));
+        }
+        if (type.has(COVERABLE)) {
+            coverHandler.set(() -> new MachineCoverHandler<>((T)this));
+        }
         multiTexturer = new LazyValue<>(() -> new DynamicTexturer<>(DynamicTexturers.TILE_DYNAMIC_TEXTURER));
     }
 
-    public void setOpenContainer(ContainerMachine c) {
-        this.openContainer = c;
+    public void addOpenContainer(ContainerMachine<T> c) {
+        this.openContainers.add(c);
     }
 
-    public void onContainerClose() {
-        this.openContainer = null;
+    public void onContainerClose(ContainerMachine<T> c) {
+        this.openContainers.remove(c);
     }
 
     @Override
     public void onFirstTick() {
+        super.onFirstTick();
         if (isServerSide()) {
             this.itemHandler.ifPresent(MachineItemHandler::init);
             this.fluidHandler.ifPresent(MachineFluidHandler::init);
@@ -144,6 +165,11 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         return true;
     }
 
+    public void onBlockUpdate(BlockPos neighbor){
+        Direction facing = Utils.getOffsetFacing(this.getPos(), neighbor);
+        coverHandler.ifPresent(h -> h.get(facing).onBlockUpdate(facing));
+    }
+
     public void ofState(@Nonnull BlockState state) {
         Block block = state.getBlock();
         this.tier = ((BlockMachine)block).getTier();
@@ -174,25 +200,22 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
             fluidHandler.ifPresent(MachineFluidHandler::onRemove);
             itemHandler.ifPresent(MachineItemHandler::onRemove);
             energyHandler.ifPresent(MachineEnergyHandler::onRemove);
-            recipeHandler.ifPresent(MachineRecipeHandler::resetRecipe);
+            recipeHandler.ifPresent(MachineRecipeHandler::onRemove);
 
-            coverHandler.invalidate();
-            fluidHandler.invalidate();
-            itemHandler.invalidate();
-            energyHandler.invalidate();
+            dispatch.invalidate();
         }
     }
 
     @Override
     public void onMachineEvent(IMachineEvent event, Object... data) {
-        if (!this.getWorld().isRemote) {
+        if (this.getWorld() != null && !this.getWorld().isRemote) {
             coverHandler.ifPresent(c -> c.onMachineEvent(event, data));
             itemHandler.ifPresent(i -> i.onMachineEvent(event, data));
             energyHandler.ifPresent(e -> e.onMachineEvent(event, data));
             fluidHandler.ifPresent(f -> f.onMachineEvent(event, data));
             recipeHandler.ifPresent(r -> r.onMachineEvent(event, data));
-            if (event instanceof ContentEvent && openContainer != null) {
-                openContainer.detectAndSendChanges();
+            if (event instanceof ContentEvent && openContainers.size() > 0) {
+                openContainers.forEach(ContainerMachine::detectAndSendLiquidChanges);
             }
         }
     }
@@ -201,7 +224,7 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
     public Machine<?> getMachineType() {
         if (type != null) return type;
         Block block = getBlockState().getBlock();
-        if (!(block instanceof BlockMachine)) return Data.MACHINE_INVALID;
+        if (!(block instanceof BlockMachine)) return null;
         return ((BlockMachine) block).getType();
     }
 
@@ -227,23 +250,43 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         if (state == AIR.getDefaultState()) {
             return Direction.NORTH;
         }
+        if (getMachineType().allowVerticalFacing()){
+            return state.get(BlockStateProperties.FACING);
+        }
         return state.get(BlockStateProperties.HORIZONTAL_FACING);
     }
 
     public boolean setFacing(Direction side) {
         //TODO: Move covers as well?
-        if (side == getFacing() || side.getAxis() == Direction.Axis.Y) return false;
+        if (side == getFacing() || (side.getAxis() == Direction.Axis.Y && !getMachineType().allowVerticalFacing())) return false;
         boolean isEmpty = coverHandler.map(ch -> ch.get(side).isEmpty()).orElse(true);
         if (isEmpty) {
-            getWorld().setBlockState(getPos(), getBlockState().with(BlockStateProperties.HORIZONTAL_FACING, side));
+            BlockState state = getBlockState();
+            if (getMachineType().allowVerticalFacing()){
+                state = state.with(BlockStateProperties.FACING, side);
+                if (side.getAxis() != Direction.Axis.Y){
+                    state = state.with(BlockMachine.HORIZONTAL_FACING, side);
+                }
+            } else {
+                state = state.with(BlockStateProperties.HORIZONTAL_FACING, side);
+            }
+            getWorld().setBlockState(getPos(), state);
             refreshCaps();
             return true;
         }
         return false;
     }
+    
+    public boolean wrenchMachine(PlayerEntity player, BlockRayTraceResult res, boolean crouch) {
+        if (crouch || getMachineType().getOutputCover() == Data.COVERNONE) {
+            //Machine has no output
+            return setFacing(Utils.getInteractSide(res));
+        }
+        return setOutputFacing(player, Utils.getInteractSide(res));
+    }
 
     @Override
-    public void onGuiEvent(IGuiEvent event, int... data) {
+    public void onGuiEvent(IGuiEvent event, PlayerEntity player, int... data) {
         if (event == ITEM_EJECT || event == FLUID_EJECT) {
             coverHandler.ifPresent(ch -> {
                 ch.get(ch.getOutputFacing()).onMachineEvent(this, event, data);
@@ -258,7 +301,7 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
 
     // TODO: Fix
     public Direction getOutputFacing() {
-        if (type.getOutputCover() != null  || type.getOutputCover() != Data.COVERNONE) {
+        if (type.getOutputCover() != null  && type.getOutputCover() != Data.COVERNONE) {
             return coverHandler.map(MachineCoverHandler::getOutputFacing).orElse(getFacing().getOpposite());
         }
         return null;
@@ -284,21 +327,39 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         return energyHandler.map(EnergyHandler::getInputVoltage).orElse(0);
     }
 
+    public int getMaxOutputVoltage() {
+        return energyHandler.map(EnergyHandler::getOutputVoltage).orElse(0);
+    }
+
     /** Helpers **/
     public void resetMachine() {
         setMachineState(getDefaultMachineState());
     }
 
     public void toggleMachine() {
-        setMachineState(getMachineState() == MachineState.DISABLED ? getDefaultMachineState() : MachineState.DISABLED);
+        if (getMachineState() == MachineState.DISABLED) {
+            setMachineState(disabledState);
+            disabledState = null;
+            if (getMachineState().allowRecipeCheck()) {
+                recipeHandler.ifPresent(MachineRecipeHandler::checkRecipe);
+            }
+        } else {
+            disableMachine();
+        }
+    }
+
+    protected void disableMachine() {
+        disabledState = getMachineState();
+        setMachineState(MachineState.DISABLED);
     }
 
     public void setMachineState(MachineState newState) {
         if (this.machineState != newState) {
             this.machineState = newState;
-            if (hadFirstTick()) {
+            if (world != null) {
                 sidedSync(true);
             }
+            markDirty();
         }
     }
 
@@ -343,37 +404,52 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         return getMachineType().has(GUI) ? getMachineType().getGui().getMenuHandler().getMenu(this, inv, windowId) : null;
     }
 
+    public boolean canPlayerOpenGui(PlayerEntity playerEntity){
+        return true;
+    }
+
     public void refreshCaps() {
         if (isServerSide()) {
-            if (energyHandler.isPresent()) {
-                LazyOptional old = energyHandler;
-                MachineEnergyHandler<?> handler = energyHandler.orElse(null);
-                energyHandler = LazyOptional.of(() -> handler);
-                old.invalidate();
-            }
-            if (fluidHandler.isPresent()) {
-                LazyOptional old = fluidHandler;
-                MachineFluidHandler<?> fhandler = fluidHandler.orElse(null);
-                fluidHandler = LazyOptional.of(() -> fhandler);
-                old.invalidate();
-            }
-            itemHandler.ifPresent(MachineItemHandler::refreshCap);
+            dispatch.refresh();
         }
     }
 
-    public <T> boolean blocksCapability(@Nonnull Capability<T> cap, Direction side) {
+    public void refreshCap(Capability<?> cap) {
+        if (isServerSide()) {
+            dispatch.refresh(cap);
+        }
+    }
+
+    public void invalidateCaps() {
+        if (isServerSide()) {
+            dispatch.invalidate();
+        }
+    }
+
+    public void invalidateCap(Capability<?> cap) {
+        if (isServerSide()) {
+            dispatch.invalidate(cap);
+        }
+    }
+
+    public <V> boolean blocksCapability(@Nonnull Capability<V> cap, Direction side) {
         return coverHandler.map(t -> t.blocksCapability(cap, side)).orElse(false);
     }
 
     @Nonnull
     @Override
     public <T> LazyOptional<T> getCapability(@Nonnull Capability<T> cap, Direction side) {
-        if (cap == COVERABLE_HANDLER_CAPABILITY && coverHandler.isPresent()) return coverHandler.cast();
+        if (cap == COVERABLE_HANDLER_CAPABILITY && coverHandler.isPresent()) return coverHandler.side(side).cast();
+        if (side == getFacing() && !allowsFrontIO()) return LazyOptional.empty();
         if (blocksCapability(cap, side)) return LazyOptional.empty();
-        if (cap == ITEM_HANDLER_CAPABILITY && itemHandler.isPresent()) return itemHandler.resolve().orElse(null).getCapability().cast();
-        else if (cap == FLUID_HANDLER_CAPABILITY && fluidHandler.isPresent()) return fluidHandler.cast();
-        else if (cap == TesseractGTCapability.ENERGY_HANDLER_CAPABILITY && energyHandler.isPresent()) return energyHandler.cast();
+        if (cap == ITEM_HANDLER_CAPABILITY && itemHandler.isPresent()) return itemHandler.side(side).cast();
+        else if (cap == FLUID_HANDLER_CAPABILITY && fluidHandler.isPresent()) return fluidHandler.side(side).cast();
+        else if (cap == TesseractGTCapability.ENERGY_HANDLER_CAPABILITY && energyHandler.isPresent()) return energyHandler.side(side).cast();
         return super.getCapability(cap, side);
+    }
+
+    public final boolean allowsFrontIO() {
+        return getMachineType().allowsFrontIO();
     }
 
     @Override
@@ -381,6 +457,9 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         super.read(state, tag);
         this.tier = AntimatterAPI.get(Tier.class, tag.getString(Ref.KEY_MACHINE_TIER));
         setMachineState(MachineState.VALUES[tag.getInt(Ref.KEY_MACHINE_STATE)]);
+        if (tag.contains(Ref.KEY_MACHINE_STATE_D)) {
+            disabledState = MachineState.VALUES[tag.getInt(Ref.KEY_MACHINE_STATE_D)];
+        }
         if (tag.contains(Ref.KEY_MACHINE_ITEMS))
             itemHandler.ifPresent(i -> i.deserializeNBT(tag.getCompound(Ref.KEY_MACHINE_ITEMS)));
         if (tag.contains(Ref.KEY_MACHINE_ENERGY))
@@ -398,6 +477,8 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
         super.write(tag);
         tag.putString(Ref.KEY_MACHINE_TIER, getMachineTier().getId());
         tag.putInt(Ref.KEY_MACHINE_STATE, machineState.ordinal());
+        if (disabledState != null)
+            tag.putInt(Ref.KEY_MACHINE_STATE_D, disabledState.ordinal());
         itemHandler.ifPresent(i -> tag.put(Ref.KEY_MACHINE_ITEMS, i.serializeNBT()));
         energyHandler.ifPresent(e -> tag.put(Ref.KEY_MACHINE_ENERGY, e.serializeNBT()));
         coverHandler.ifPresent(e -> tag.put(Ref.KEY_MACHINE_COVER, e.serializeNBT()));
@@ -428,7 +509,7 @@ public class TileEntityMachine extends TileEntityTickable implements INamedConta
             if (inputs > 0) slots += (" IT_IN: " + inputs + ",");
             if (outputs > 0) slots += (" IT_OUT: " + outputs + ",");
         }
-        if (getMachineType().has(FLUID)) {
+        if (getMachineType().has(FLUID) && getMachineType().has(GUI)) {
             int inputs = getMachineType().getGui().getSlots(SlotType.FL_IN, getMachineTier()).size();
             int outputs = getMachineType().getGui().getSlots(SlotType.FL_OUT, getMachineTier()).size();
             if (inputs > 0) slots += (" FL_IN: " + inputs + ",");

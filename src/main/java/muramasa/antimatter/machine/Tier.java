@@ -1,6 +1,7 @@
 package muramasa.antimatter.machine;
 
 import muramasa.antimatter.AntimatterAPI;
+import muramasa.antimatter.Ref;
 import muramasa.antimatter.registration.IAntimatterObject;
 import muramasa.antimatter.texture.Texture;
 import net.minecraft.util.text.TextFormatting;
@@ -10,33 +11,33 @@ public class Tier implements IAntimatterObject {
     //TODO move Tiers to GT?
 
     /** Electricity Tiers **/
-    public static Tier ULV = new Tier("gti", "ulv", 8, TextFormatting.WHITE); //Tier 1
-    public static Tier LV = new Tier("gti", "lv", 32, TextFormatting.WHITE); //Tier 2
-    public static Tier MV = new Tier("gti", "mv", 128, TextFormatting.WHITE); //Tier 3
-    public static Tier HV = new Tier("gti", "hv", 512, TextFormatting.YELLOW); //Tier 4
-    public static Tier EV = new Tier("gti", "ev", 2048, TextFormatting.AQUA); //Tier 5
-    public static Tier IV = new Tier("gti", "iv", 8192, TextFormatting.LIGHT_PURPLE); //Tier 6
-    public static Tier LUV = new Tier("gti", "luv", 32768, TextFormatting.LIGHT_PURPLE); //Tier 7
-    public static Tier ZPM = new Tier("gti", "zpm", 131072, TextFormatting.LIGHT_PURPLE); //Tier 8
-    public static Tier UV = new Tier("gti", "uv", 524288, TextFormatting.LIGHT_PURPLE); //Tier 9
-    public static Tier MAX = new Tier("gti", "max", 2147483647, TextFormatting.LIGHT_PURPLE); //Tier 15
+    public static Tier ULV = new Tier(Ref.ID, "ulv", 8, TextFormatting.WHITE); //Tier 1
+    public static Tier LV = new Tier(Ref.ID, "lv", 32, TextFormatting.WHITE); //Tier 2
+    public static Tier MV = new Tier(Ref.ID, "mv", 128, TextFormatting.WHITE); //Tier 3
+    public static Tier HV = new Tier(Ref.ID, "hv", 512, TextFormatting.YELLOW); //Tier 4
+    public static Tier EV = new Tier(Ref.ID, "ev", 2048, TextFormatting.AQUA); //Tier 5
+    public static Tier IV = new Tier(Ref.ID, "iv", 8192, TextFormatting.LIGHT_PURPLE); //Tier 6
+    public static Tier LUV = new Tier(Ref.ID, "luv", 32768, TextFormatting.LIGHT_PURPLE); //Tier 7
+    public static Tier ZPM = new Tier(Ref.ID, "zpm", 131072, TextFormatting.LIGHT_PURPLE); //Tier 8
+    public static Tier UV = new Tier(Ref.ID, "uv", 524288, TextFormatting.LIGHT_PURPLE); //Tier 9
+    public static Tier MAX = new Tier(Ref.ID, "max", 2147483647, TextFormatting.LIGHT_PURPLE); //Tier 15
 
     /** Special Tiers **/
     //TODO make these Tier 0 and 1?
-    public static Tier BRONZE = new Tier("gti", "bronze", 0, TextFormatting.WHITE);
-    public static Tier STEEL = new Tier("gti", "steel", 0, TextFormatting.WHITE);
+    public static Tier BRONZE = new Tier(Ref.ID, "bronze", 0, TextFormatting.WHITE);
+    public static Tier STEEL = new Tier(Ref.ID, "steel", 0, TextFormatting.WHITE);
 
-    private String domain, id;
-    private int voltage;
-    private TextFormatting rarityColor;
-    private Texture baseTexture;
+    private final String domain, id;
+    private final int voltage;
+    private final TextFormatting rarityColor;
+    private final String baseTexture;
 
     public Tier(String domain, String id, int voltage, TextFormatting rarityColor) {
         this.domain = domain;
         this.id = id;
         this.voltage = voltage;
         this.rarityColor = rarityColor;
-        this.baseTexture = new Texture(domain, "block/machine/base/" + id);
+        this.baseTexture = "block/machine/base/" + id;
         AntimatterAPI.register(Tier.class, this);
     }
 
@@ -65,8 +66,9 @@ public class Tier implements IAntimatterObject {
         return rarityColor;
     }
 
-    public Texture getBaseTexture() {
-        return baseTexture;
+
+    public Texture getBaseTexture(String domain) {
+        return new Texture(domain, baseTexture);
     }
 
     public static Tier[] getSteam() {
@@ -89,10 +91,10 @@ public class Tier implements IAntimatterObject {
         return Tier.IV; //TODO update...
     }
 
-    public static Texture[] getTextures(Tier... tiers) {
+    public static Texture[] getTextures(String domain, Tier... tiers) {
         Texture[] textures = new Texture[tiers.length];
         for (int i = 0; i < tiers.length; i++) {
-            textures[i] = tiers[i].getBaseTexture();
+            textures[i] = tiers[i].getBaseTexture(domain);
         }
         return textures;
     }

@@ -15,7 +15,6 @@ import muramasa.antimatter.dynamic.BlockDynamic;
 import muramasa.antimatter.dynamic.ModelConfig;
 import muramasa.antimatter.machine.types.Machine;
 import muramasa.antimatter.network.packets.FluidStackPacket;
-import muramasa.antimatter.registration.IAntimatterObject;
 import muramasa.antimatter.registration.IItemBlockProvider;
 import muramasa.antimatter.texture.Texture;
 import muramasa.antimatter.tile.TileEntityMachine;
@@ -25,7 +24,6 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.SoundType;
 import net.minecraft.client.util.ITooltipFlag;
-import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.ServerPlayerEntity;
 import net.minecraft.inventory.InventoryHelper;
@@ -33,6 +31,7 @@ import net.minecraft.item.BlockItemUseContext;
 import net.minecraft.item.ItemGroup;
 import net.minecraft.item.ItemStack;
 import net.minecraft.loot.LootContext;
+import net.minecraft.state.DirectionProperty;
 import net.minecraft.state.StateContainer;
 import net.minecraft.state.properties.BlockStateProperties;
 import net.minecraft.tileentity.TileEntity;
@@ -58,7 +57,6 @@ import net.minecraftforge.fml.network.NetworkHooks;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
-import java.util.Arrays;
 import java.util.List;
 
 import static com.google.common.collect.ImmutableMap.of;
@@ -66,15 +64,26 @@ import static muramasa.antimatter.Data.*;
 import static muramasa.antimatter.machine.MachineFlag.BASIC;
 import static net.minecraft.util.Direction.*;
 
-public class BlockMachine extends BlockDynamic implements IAntimatterObject, IItemBlockProvider {
+public class BlockMachine extends BlockDynamic implements IItemBlockProvider {
+
+    public static final DirectionProperty HORIZONTAL_FACING = DirectionProperty.create("horizontal_facing", Direction.Plane.HORIZONTAL);
 
     protected Machine<?> type;
     protected Tier tier;
+    protected final StateContainer<Block, BlockState> stateContainer;
 
     public BlockMachine(Machine<?> type, Tier tier) {
-        super(type.getDomain(), type.getId() + "_" + tier.getId(), Properties.create(WRENCH_MATERIAL).hardnessAndResistance(1.0f, 10.0f).sound(SoundType.METAL).setRequiresTool());
+        this(type, tier, Properties.create(WRENCH_MATERIAL).hardnessAndResistance(1.0f, 10.0f).sound(SoundType.METAL).setRequiresTool());
+    }
+
+    public BlockMachine(Machine<?> type, Tier tier, Properties properties) {
+        super(type.getDomain(), type.getId() + "_" + tier.getId(), properties);
+        StateContainer.Builder<Block, BlockState> builder = new StateContainer.Builder<>(this);
         this.type = type;
         this.tier = tier;
+        this.fillStateContainer(builder);
+        this.stateContainer = builder.createStateContainer(Block::getDefaultState, BlockState::new);
+        this.setDefaultState(this.stateContainer.getBaseState());
     }
 
     public Machine<?> getType() {
@@ -87,13 +96,29 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
 
     @Override
     protected void fillStateContainer(StateContainer.Builder<Block, BlockState> builder) {
-        builder.add(BlockStateProperties.HORIZONTAL_FACING);
+        if (type == null) return; // means this is the first run
+        if (type.allowVerticalFacing()){
+            builder.add(BlockStateProperties.FACING).add(HORIZONTAL_FACING);
+        } else {
+            builder.add(BlockStateProperties.HORIZONTAL_FACING);
+        }
+    }
+
+    @Override
+    public StateContainer<Block, BlockState> getStateContainer() {
+        return stateContainer;
     }
 
     @Nullable
     @Override
     public BlockState getStateForPlacement(BlockItemUseContext context) {
-        return this.getDefaultState().with(BlockStateProperties.HORIZONTAL_FACING, context.getPlacementHorizontalFacing().getOpposite());
+        if (type.allowVerticalFacing()){
+            Direction dir = context.getNearestLookingDirection().getOpposite();
+            dir = dir.getAxis() == Axis.Y ? dir.getOpposite() : dir;
+            return this.getDefaultState().with(HORIZONTAL_FACING, type.handlePlacementFacing(context, BlockStateProperties.HORIZONTAL_FACING, context.getPlacementHorizontalFacing().getOpposite())).with(BlockStateProperties.FACING, type.handlePlacementFacing(context, BlockStateProperties.FACING, dir));
+        } else {
+            return this.getDefaultState().with(BlockStateProperties.HORIZONTAL_FACING, type.handlePlacementFacing(context, HORIZONTAL_FACING, context.getPlacementHorizontalFacing().getOpposite()));
+        }
     }
 
     @Nullable
@@ -109,13 +134,24 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
         return true;
     }
 
+    @Override
+    public void neighborChanged(BlockState state, World worldIn, BlockPos pos, Block blockIn, BlockPos fromPos, boolean isMoving) {
+        super.neighborChanged(state, worldIn, pos, blockIn, fromPos, isMoving);
+        if (!worldIn.isRemote){
+            TileEntityMachine<?> tile = (TileEntityMachine<?>)worldIn.getTileEntity(pos);
+            if (tile != null){
+                tile.onBlockUpdate(fromPos);
+            }
+        }
+    }
+
     @Nonnull
     @Override
     public ActionResultType onBlockActivated(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockRayTraceResult hit) {
         ActionResultType ty = onBlockActivatedBoth(state, world, pos, player, hand, hit);
         if (ty.isSuccessOrConsume()) return ty;
         if (!world.isRemote) {
-            TileEntityMachine tile = (TileEntityMachine)world.getTileEntity(pos);
+            TileEntityMachine<?> tile = (TileEntityMachine<?>)world.getTileEntity(pos);
             if (tile != null) {
                 ItemStack stack = player.getHeldItem(hand);
                 AntimatterToolType type = Utils.getToolType(player);
@@ -130,29 +166,41 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
                     }
                     //Handle tool types.
                     if (type == WRENCH || type == ELECTRIC_WRENCH) {
-                        if (!player.isCrouching()) {
-                            boolean ok = tile.setOutputFacing(player, Utils.getInteractSide(hit));
-                            return ok ? ActionResultType.SUCCESS : ActionResultType.PASS;
+                        if (tile.wrenchMachine(player, hit, player.isCrouching())) {
+                            return ActionResultType.SUCCESS;
                         }
-                        //TODO: Disbling machines isnt working.
-                    } else if (type == HAMMER) {
-                     //   tile.toggleMachine();
-                        // TODO: Replace by new TranslationTextComponent()
-                      //  player.sendMessage(new StringTextComponent("Machine was " + (tile.getMachineState() == MachineState.DISABLED ? "disabled" : "enabled")), player.getUniqueID());
-                        player.sendMessage(new StringTextComponent("disabling machines doesnt work yet"), player.getUniqueID());
+                    } else if (type == SOFT_HAMMER) {
+                        tile.toggleMachine();
+                        if (tile.getMachineState() == MachineState.DISABLED) {
+                            player.sendMessage(new StringTextComponent("Disabled machine."), player.getUniqueID());
+                        } else {
+                            player.sendMessage(new StringTextComponent("Enabled machine."), player.getUniqueID());
+                        }
+                        Utils.damageStack(stack, player);
                         return ActionResultType.SUCCESS;
                     } else if (type == CROWBAR) {
                         if (!player.isCrouching()){
-                            return tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY).map(h -> h.removeCover(player, Utils.getInteractSide(hit), false)).orElse(false) ? ActionResultType.SUCCESS : ActionResultType.PASS;
+                            if (tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY).map(h -> h.removeCover(player, Utils.getInteractSide(hit), false)).orElse(false)) {
+                                Utils.damageStack(stack, player);
+                                return ActionResultType.SUCCESS;
+                            }
                         } else {
-                            return tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY).map(h -> h.moveCover(player, hit.getFace(), Utils.getInteractSide(hit))).orElse(false) ? ActionResultType.SUCCESS : ActionResultType.PASS;
+                            if (tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY).map(h -> h.moveCover(player, hit.getFace(), Utils.getInteractSide(hit))).orElse(false)) {
+                                Utils.damageStack(stack, player);
+                                return ActionResultType.SUCCESS;
+                            }
                         }
                     } else if (type == SCREWDRIVER || type == ELECTRIC_SCREWDRIVER) {
                         CoverStack<?> instance = tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY).map(h -> h.get(hit.getFace())).orElse(COVER_EMPTY);
                         if (!player.isCrouching()) {
-                            return !instance.isEmpty() && instance.getCover().hasGui() && instance.openGui(player, hit.getFace()) ? ActionResultType.SUCCESS : ActionResultType.PASS;
-                        } 
+                            if (!instance.isEmpty() && instance.getCover().hasGui() && instance.openGui(player, hit.getFace())) {
+                                Utils.damageStack(stack, player);
+                                return ActionResultType.SUCCESS;
+                            }
+                        }
                      }
+                    boolean coverInteract = tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY, hit.getFace()).map(h -> h.onInteract(player, hand, hit.getFace(), Utils.getToolType(player))).orElse(false);
+                    if (coverInteract) return ActionResultType.SUCCESS;
                     //Has gui?
                     if (tile.getCapability(CapabilityFluidHandler.FLUID_HANDLER_CAPABILITY, hit.getFace()).map(fh -> {
                         FluidActionResult res = FluidUtil.tryEmptyContainer(stack, fh, 1000, player, true);
@@ -186,7 +234,7 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
                     }).orElse(false)) {
                         return ActionResultType.SUCCESS;
                     }
-                    if (getType().has(MachineFlag.GUI) ) {
+                    if (getType().has(MachineFlag.GUI) && tile.canPlayerOpenGui(player)) {
                         NetworkHooks.openGui((ServerPlayerEntity) player, tile, extra -> {
                             extra.writeBlockPos(pos);
                             tile.coverHandler.ifPresent(ch -> {
@@ -204,7 +252,7 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
                         });
                         return ActionResultType.SUCCESS;
                     }
-                    return tile.getCapability(AntimatterCaps.COVERABLE_HANDLER_CAPABILITY).map(h -> h.onInteract(player, hand, hit.getFace(), Utils.getToolType(player))).orElse(false) ? ActionResultType.SUCCESS : ActionResultType.PASS;
+                    return ActionResultType.PASS;
                 }
             }
         }
@@ -212,7 +260,7 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
     }
     //This is also a hack. Since the game relies on multiblock checks being done on both sides this method is split out.
     protected ActionResultType onBlockActivatedBoth(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockRayTraceResult hit) {
-        TileEntityMachine tile = (TileEntityMachine)world.getTileEntity(pos);
+        /*TileEntityMachine tile = (TileEntityMachine)world.getTileEntity(pos);
         if (tile != null) {
             AntimatterToolType type = Utils.getToolType(player);
             if (type == WRENCH || type == ELECTRIC_WRENCH) {
@@ -221,36 +269,26 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
                     return ok ? ActionResultType.CONSUME : ActionResultType.PASS;
                 }
             }
-        }
+        }*/
         return ActionResultType.PASS;
     }
-
+/* //This messes up cover logic.
     @Override
     public void onBlockPlacedBy(World world, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
         if (placer != null) { //Y = 0 , reduce to xz plane
-            Direction dir = getFacingFromVector((float) placer.getLookVec().x, (float) 0, (float) placer.getLookVec().z).getOpposite();
-            world.setBlockState(pos, state.with(BlockStateProperties.HORIZONTAL_FACING, dir));
+            float y = (float) (type.allowVerticalFacing() ? placer.getLookVec().y : 0);
+            Direction dir = getFacingFromVector((float) placer.getLookVec().x, y, (float) placer.getLookVec().z).getOpposite();
+            BlockState state1 = state.with((type.allowVerticalFacing() ? BlockStateProperties.FACING : BlockStateProperties.HORIZONTAL_FACING), dir);
+            if (type.allowVerticalFacing()) state1 = state1.with(HORIZONTAL_FACING, placer.getHorizontalFacing().getOpposite());
+            world.setBlockState(pos, state1);
         }
     }
-
+*/
     @Nullable
     @Override
     public ToolType getHarvestTool(BlockState state) {
         return Data.WRENCH.getToolType();
     }
-
-//    @Override
-//    public void breakBlock(World world, BlockPos pos, BlockState state) {
-//        TileEntity tile = Utils.getTile(world, pos);
-//        if (tile instanceof TileEntityMachine) {
-//            TileEntityMachine machine = (TileEntityMachine) tile;
-//            machine.itemHandler.ifPresent(h -> {
-//                h.getInputList().forEach(i -> Utils.spawnItems(world, pos, null, i));
-//                h.getOutputList().forEach(i -> Utils.spawnItems(world, pos, null, i));
-//            });
-//        }
-//    }
-
 
     @Override
     public List<ItemStack> getDrops(BlockState state, LootContext.Builder builder) {
@@ -259,11 +297,11 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
 
     @Override
     public void onReplaced(BlockState state, World worldIn, BlockPos pos, BlockState newState, boolean isMoving) {
-        if (!state.isIn(newState.getBlock())) {
+        if (!state.getBlock().matchesBlock(newState.getBlock())) {
             if (!worldIn.isRemote) {
                 TileEntity tile = worldIn.getTileEntity(pos);
                 if (tile == null) return;
-                TileEntityMachine machine = (TileEntityMachine) tile;
+                TileEntityMachine<?> machine = (TileEntityMachine<?>) tile;
                 machine.itemHandler.ifPresent(t -> t.getAllItems().forEach(stack -> InventoryHelper.spawnItemStack(worldIn, machine.getPos().getX(), machine.getPos().getY(), machine.getPos().getZ(), stack)));
                 machine.coverHandler.ifPresent(t -> t.getDrops().forEach(stack -> InventoryHelper.spawnItemStack(worldIn, machine.getPos().getX(), machine.getPos().getY(), machine.getPos().getZ(), stack)));
             }
@@ -285,29 +323,70 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
     public void addInformation(ItemStack stack, @Nullable IBlockReader world, List<ITextComponent> tooltip, ITooltipFlag flag) {
         if (getType().has(BASIC)) {
             if (getTier().getVoltage() > 0) {
-                tooltip.add(new TranslationTextComponent("machine.voltage.in").appendString(": ").append(new StringTextComponent(getTier().getVoltage() + " (" + getTier().getId().toUpperCase() + ")")).mergeStyle(TextFormatting.GREEN));
-                tooltip.add(new TranslationTextComponent("machine.power.capacity").appendString(": ").append(new StringTextComponent("" + (getTier().getVoltage() * 64))).mergeStyle(TextFormatting.BLUE));
+                tooltip.add(new TranslationTextComponent("machine.voltage.in").appendString(": ").appendSibling(new StringTextComponent(getTier().getVoltage() + " (" + getTier().getId().toUpperCase() + ")")).mergeStyle(TextFormatting.GREEN));
+                tooltip.add(new TranslationTextComponent("machine.power.capacity").appendString(": ").appendSibling(new StringTextComponent("" + (getTier().getVoltage() * 64))).mergeStyle(TextFormatting.BLUE));
             }
         }
     }
 
-    /* TODO: needed?
-    @Override
-    public int getBlockColor(BlockState state, @Nullable IBlockReader world, @Nullable BlockPos pos, int i) {
-        if (!(state.getBlock() instanceof BlockMachine) && world == null || pos == null) return -1;
-        TileEntity tile = Utils.getTile(world, pos);
-        return tile instanceof TileEntityMachine && i == 0 ? /*((TileEntityMachine) tile).getTextureData().getTint() -1 : -1;
+    //This makes no sense because it is manually derived by testing, to make sure covers render properly.
+    //Probably needs a rewrite of the model logic to get rid of this mess.
+    private Direction getDir(Direction hFace, Direction which, Direction face) {
+        if (which.getAxis() == Axis.Y) return which.getOpposite();
+        switch (hFace) {
+            case NORTH:
+                if (which.getAxis() == Axis.Z) return which.getOpposite();
+                break;
+            case SOUTH:
+                if (which.getAxis() == Axis.X) return which.getOpposite();
+                break;
+            case EAST:
+                switch (which) {
+                    case SOUTH:
+                        return EAST;
+                    case EAST:
+                        return SOUTH;
+                    case NORTH:
+                        return WEST;
+                    case WEST:
+                        return NORTH;
+                }
+                break;
+            case WEST:
+                switch (which) {
+                    case SOUTH:
+                        return WEST;
+                    case WEST:
+                        return SOUTH;
+                    case NORTH:
+                        return EAST;
+                    case EAST:
+                        return NORTH;
+                }
+                break;
+        }
+        return which;
     }
-    */
 
     @Override
     public ModelConfig getConfig(BlockState state, IBlockReader world, BlockPos.Mutable mut, BlockPos pos) {
-        Direction facing = state.get(BlockStateProperties.HORIZONTAL_FACING);
+        Direction facing = type.allowVerticalFacing() ? state.get(BlockStateProperties.FACING) : state.get(BlockStateProperties.HORIZONTAL_FACING);
         TileEntity tile = world.getTileEntity(pos);
         if (tile instanceof TileEntityMachine) {
             MachineState machineState = ((TileEntityMachine) tile).getMachineState();
-            if (((TileEntityMachine) tile).coverHandler.isPresent()) {
-                CoverHandler<?> h = ((TileEntityMachine) tile).coverHandler.orElse(null);
+            if (((TileEntityMachine<?>) tile).coverHandler.isPresent()) {
+                CoverHandler<?> h = ((TileEntityMachine<?>) tile).coverHandler.orElse(null);
+                if (type.allowVerticalFacing() && facing.getAxis() == Axis.Y){
+                    Direction horizontalFacing = state.get(HORIZONTAL_FACING);
+                    return config.set(new int[] {
+                            h.get(DOWN).skipRender() ? getModelId(facing, horizontalFacing, Utils.coverRotateFacing(getDir(horizontalFacing, DOWN, facing), facing), machineState) : 0,
+                            h.get(UP).skipRender() ? getModelId(facing, horizontalFacing, Utils.coverRotateFacing(getDir(horizontalFacing, UP, facing), facing), machineState) : 0,
+                            h.get(NORTH).skipRender() ? getModelId(facing, horizontalFacing, Utils.coverRotateFacing(getDir(horizontalFacing, NORTH, facing), facing), machineState) : 0,
+                            h.get(SOUTH).skipRender() ? getModelId(facing, horizontalFacing, Utils.coverRotateFacing(getDir(horizontalFacing, SOUTH, facing), facing), machineState) : 0,
+                            h.get(WEST).skipRender() ? getModelId(facing, horizontalFacing, Utils.coverRotateFacing(getDir(horizontalFacing, WEST, facing), facing), machineState) : 0,
+                            h.get(EAST).skipRender() ? getModelId(facing, horizontalFacing, Utils.coverRotateFacing(getDir(horizontalFacing, EAST, facing), facing), machineState) : 0
+                    });
+                }
                 return config.set(new int[] {
                     h.get(DOWN).skipRender() ? getModelId(facing, DOWN, machineState) : 0,
                     h.get(UP).skipRender() ? getModelId(facing, UP, machineState) : 0,
@@ -317,17 +396,35 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
                     h.get(EAST).skipRender() ? getModelId(facing, Utils.coverRotateFacing(EAST,facing), machineState) : 0
                 });
             } else {
+                if (type.allowVerticalFacing() && facing.getAxis() == Axis.Y){
+                    Direction horizontalFacing = state.get(HORIZONTAL_FACING);
+                    int[] configInts = new int[] {
+                            getModelId(facing, horizontalFacing, DOWN, machineState),
+                            getModelId(facing, horizontalFacing, UP, machineState),
+                            getModelId(facing, horizontalFacing, NORTH, machineState),
+                            getModelId(facing, horizontalFacing, SOUTH, machineState),
+                            getModelId(facing, horizontalFacing, WEST, machineState),
+                            getModelId(facing, horizontalFacing, EAST, machineState)
+                    };
+                    return config.set(configInts);
+                }
                 return config.set(new int[] {
-                    getModelId(facing, DOWN, machineState),
-                    getModelId(facing, UP, machineState),
-                    getModelId(facing, NORTH, machineState),
-                    getModelId(facing, SOUTH, machineState),
-                    getModelId(facing, WEST, machineState),
-                    getModelId(facing, EAST, machineState)
+                        getModelId(facing, DOWN, machineState),
+                        getModelId(facing, UP, machineState),
+                        getModelId(facing, NORTH, machineState),
+                        getModelId(facing, SOUTH, machineState),
+                        getModelId(facing, WEST, machineState),
+                        getModelId(facing, EAST, machineState)
                 });
             }
         }
         return config.set(new int[]{0});
+    }
+
+    protected int getModelId(Direction facing, Direction horizontalFacing, Direction overlay, MachineState state) {
+        state = (state == MachineState.ACTIVE) ? MachineState.ACTIVE : MachineState.IDLE; //Map to only ACTIVE/IDLE.
+        int id = ((state.ordinal() + 1) * 10000) + ((facing.getIndex() + 1) * 1000) + ((horizontalFacing.getIndex() + 1) * 100) + (overlay.getIndex() + 1);
+        return id;
     }
 
     protected int getModelId(Direction facing, Direction overlay, MachineState state) {
@@ -344,7 +441,7 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
                 b.texture("base" +  Ref.DIRS[s].getString(), base[s]);
             }
         }
-        Texture[] overlays = type.getOverlayTextures(MachineState.ACTIVE);
+        Texture[] overlays = type.getOverlayTextures(MachineState.ACTIVE, tier);
         for (int s = 0; s < 6; s++) {
             b.texture("overlay" + Ref.DIRS[s].getString(), overlays[s]);
         }
@@ -361,10 +458,19 @@ public class BlockMachine extends BlockDynamic implements IAntimatterObject, IIt
     }
 
     void buildModelsForState(AntimatterBlockModelBuilder builder, MachineState state) {
-        Texture[] overlays = type.getOverlayTextures(state);
-        for (Direction f : Arrays.asList(NORTH, WEST, SOUTH, EAST)) {
+        Texture[] overlays = type.getOverlayTextures(state, tier);
+        for (Direction f : Plane.HORIZONTAL) {
             for (Direction o : Ref.DIRS) {
                 builder.config(getModelId(f, o, state), (b, l) -> l.add(b.of(type.getOverlayModel(o)).tex(of("base", type.getBaseTexture(tier, o), "overlay", overlays[o.getIndex()])).rot(f)));
+            }
+        }
+        if (type.allowVerticalFacing()){
+            for (Direction f : Plane.VERTICAL){
+                for (Direction h : Plane.HORIZONTAL){
+                    for (Direction o : Ref.DIRS) {
+                        builder.config(getModelId(f, h, o, state), (b, l) -> l.add(b.of(type.getOverlayModel(o)).tex(of("base", type.getBaseTexture(tier, o), "overlay", overlays[o.getIndex()])).rot(f, h)));
+                    }
+                }
             }
         }
     }

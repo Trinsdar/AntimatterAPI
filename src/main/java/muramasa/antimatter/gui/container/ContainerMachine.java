@@ -11,19 +11,18 @@ import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.entity.player.ServerPlayerEntity;
 import net.minecraft.inventory.container.IContainerListener;
+import net.minecraft.inventory.container.Slot;
 import net.minecraft.util.IWorldPosCallable;
-import net.minecraftforge.items.SlotItemHandler;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
-public abstract class ContainerMachine extends AntimatterContainer {
+public abstract class ContainerMachine<T extends TileEntityMachine<T>> extends AntimatterContainer {
 
-    protected final TileEntityMachine tile;
+    protected final T tile;
     protected List<ServerPlayerEntity> listeners = new ArrayList<>();
 
-    public ContainerMachine(TileEntityMachine tile, PlayerInventory playerInv, MenuHandlerMachine<?> menuHandler, int windowId) {
+    public ContainerMachine(T tile, PlayerInventory playerInv, MenuHandlerMachine<T, ContainerMachine<T>> menuHandler, int windowId) {
         super(menuHandler.getContainerType(), windowId, playerInv, tile.getMachineType().getGui().getSlots(tile.getMachineTier()).size());
         this.tile = tile;
         addSlots(tile);
@@ -33,10 +32,10 @@ public abstract class ContainerMachine extends AntimatterContainer {
         if (!(playerInv.player instanceof ServerPlayerEntity)) {
             tile.recipeHandler.ifPresent(t -> t.setClientProgress(0));
         }
-        tile.setOpenContainer(this);
+        tile.addOpenContainer(this);
     }
 
-    public TileEntityMachine getTile() {
+    public T getTile() {
         return tile;
     }
 
@@ -49,7 +48,7 @@ public abstract class ContainerMachine extends AntimatterContainer {
     @Override
     public void onContainerClosed(PlayerEntity playerIn) {
         super.onContainerClosed(playerIn);
-        tile.onContainerClose();
+        tile.onContainerClose(this);
     }
 
     @Override
@@ -61,6 +60,10 @@ public abstract class ContainerMachine extends AntimatterContainer {
     @Override
     public void detectAndSendChanges() {
         super.detectAndSendChanges();
+        detectAndSendLiquidChanges();
+    }
+
+    public void detectAndSendLiquidChanges() {
         tile.fluidHandler.ifPresent(fh -> {
             if (!fh.isDirty()) return;
 
@@ -75,13 +78,11 @@ public abstract class ContainerMachine extends AntimatterContainer {
 
     protected void addSlots(TileEntityMachine tile) {
         Object2IntMap<String> slotIndexMap = new Object2IntOpenHashMap<>();
-        for (SlotData slot : tile.getMachineType().getGui().getSlots(tile.getMachineTier())) {
+        for (SlotData slot : tile.getMachineType().getGui().getSlots(tile.getMachineTier())){
             slotIndexMap.computeIntIfAbsent(slot.getType().getId(), k -> 0);
-            Optional<SlotItemHandler> supplier = slot.getType().getSlotSupplier().get(tile, slotIndexMap.getInt(slot.getType().getId()), slot);
-            supplier.ifPresent(handler -> {
-                addSlot(handler);
-                slotIndexMap.compute(slot.getType().getId(), (k, v) -> v + 1);
-            });
+            Slot supplier = slot.getType().getSlotSupplier().get(slot.getType(), tile, slotIndexMap.getInt(slot.getType().getId()), slot);
+            addSlot(supplier);
+            slotIndexMap.compute(slot.getType().getId(), (k, v) -> v + 1);
         }
     }
 

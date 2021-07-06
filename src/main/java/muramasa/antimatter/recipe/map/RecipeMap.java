@@ -1,11 +1,18 @@
 package muramasa.antimatter.recipe.map;
 
+import com.google.common.collect.ImmutableMap;
 import com.mojang.datafixers.util.Either;
-import it.unimi.dsi.fastutil.objects.Object2ObjectMap;
+
+import muramasa.antimatter.machine.types.Machine;
+import org.lwjgl.system.CallbackI.P;
+
 import it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import muramasa.antimatter.Antimatter;
 import muramasa.antimatter.AntimatterAPI;
+import muramasa.antimatter.capability.FluidHandler;
+import muramasa.antimatter.capability.Holder;
 import muramasa.antimatter.capability.machine.MachineFluidHandler;
 import muramasa.antimatter.capability.machine.MachineItemHandler;
 import muramasa.antimatter.gui.GuiData;
@@ -15,9 +22,8 @@ import muramasa.antimatter.machine.Tier;
 import muramasa.antimatter.recipe.Recipe;
 import muramasa.antimatter.recipe.ingredient.*;
 import muramasa.antimatter.registration.IAntimatterObject;
-import muramasa.antimatter.util.LazyHolder;
+import muramasa.antimatter.tile.TileEntityMachine;
 import muramasa.antimatter.util.Utils;
-import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.item.crafting.IRecipe;
@@ -35,6 +41,8 @@ import net.minecraftforge.common.crafting.CompoundIngredient;
 import net.minecraftforge.common.crafting.NBTIngredient;
 import net.minecraftforge.common.util.LazyOptional;
 import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.fluids.capability.IFluidHandler;
+import net.minecraftforge.items.IItemHandler;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
@@ -53,6 +61,8 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
     private final B builder;
     private final Branch LOOKUP = new Branch();
     private final List<Recipe> RECIPES_TO_COMPILE = new ObjectArrayList<>();
+    private final Set<AbstractMapIngredient> ROOT = new ObjectOpenHashSet<>();
+    private final List<AbstractMapIngredient> ROOT_SPECIAL = new ObjectArrayList<>();
 
     @Nullable
     private GuiData GUI;
@@ -61,15 +71,17 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
     @Nullable
     private Proxy PROXY;
 
+    @Nullable
+    private Object icon;
+
     @OnlyIn(Dist.CLIENT)
     private IRecipeInfoRenderer infoRenderer;
 
     //Data allows you to set related data to the map, e.g. which tier the gui displays.
-    public RecipeMap(String categoryId, B builder, Object... data) {
+    public RecipeMap(String categoryId, B builder) {
         this.id = "gt.recipe_map." + categoryId;
         this.builder = builder;
         this.builder.setMap(this);
-        initMap(data);
         AntimatterAPI.register(RecipeMap.class, this);
     }
 
@@ -94,6 +106,17 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
     public Tier getGuiTier() {
         return guiTier;
     }
+    
+    //Object can be an IDrawable or an ItemStack or an IItemProvider.
+    public RecipeMap<B> setIcon(Object object) {
+        this.icon = object;
+        return this;
+    }
+
+    @Nullable
+    public Object getIcon() {
+        return this.icon;
+    }
 
     @Nonnull
     @OnlyIn(Dist.CLIENT)
@@ -107,18 +130,42 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
         this.infoRenderer = renderer;
     }
 
-    private void initMap(Object[] data) {
-        for (Object obj : data) {
-            if (obj instanceof Tier) {
-                guiTier = (Tier) obj;
-            }
-            if (obj instanceof GuiData) {
-                this.GUI = (GuiData) obj;
-            }
-            if (obj instanceof Proxy) {
-                this.PROXY = (Proxy) obj;
-            }
-        }
+    public RecipeMap<B> setGuiTier(Tier tier) {
+        this.guiTier = tier;
+        return this;
+    }
+
+    /**
+     * Sets the gui data and overrides the data in JEI.
+     * @param gui the guidata.
+     * @return this
+     */
+    public RecipeMap<B> setGuiData(GuiData gui) {
+        this.GUI = gui;
+        AntimatterAPI.registerJEICategory(this, this.GUI);
+        return this;
+    }
+
+    /**
+     * Sets the gui data and overrides the data in JEI.
+     * @param gui the guidata.
+     * @param machine the machine.
+     * @return this
+     */
+    public RecipeMap<B> setGuiData(GuiData gui, Machine<?> machine) {
+        this.GUI = gui;
+        AntimatterAPI.registerJEICategory(this, this.GUI, machine, true);
+        return this;
+    }
+
+    /**
+     * Sets a proxy for this recipe map that is used to build recipes from other maps.
+     * @param proxy the proxy.
+     * @return this.
+     */
+    public RecipeMap<B> setProxy(Proxy proxy) {
+        this.PROXY = proxy;
+        return this;
     }
 
     @Nullable
@@ -150,7 +197,7 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
         //Collectors.toSet is very important since there are duplicate recipes but they point to the same memory location
         //so == works to remove them.
         //Or maybe not, I'm not sure but let's make a set anyways
-        return LOOKUP.getRecipes(filterHidden).collect(Collectors.toSet());
+        return LOOKUP.getRecipes(filterHidden).sorted(Comparator.comparingLong(Recipe::getPower)).collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     void add(Recipe recipe) {
@@ -158,7 +205,8 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
     }
 
     /**
-     * Adds a recipe to this map. If the recipe is empty or collides with another recipe it is not added.
+     * Adds a recipe to this map. If the recipe is empty it is not added. If it collides with another recipe it is added
+     * to the collection and the first recipe that matches a predicate is returned upon find.
      *
      * @param recipe the recipe to add.
      */
@@ -190,69 +238,78 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
         if (flag) {
             recipe.sortInputItems();
         }
-        List<List<AbstractMapIngredient>> items = fromRecipe(recipe, tags);
+        List<List<AbstractMapIngredient>> items = fromRecipe(recipe, tags, true);
 
-        Recipe r = recurseItemTreeFind(items, map, rr -> true);
-        if (r != null) {
-            Utils.onInvalidData("RECIPE COLLISION! (Map: " + this.id + ")");
-            return;
+        //Recipe r = recurseItemTreeFind(items, map, rr -> true);
+        //if (r != null) {
+            //Antimatter.LOGGER.warn("Recipe collision, adding both but only first is available.");
+        //}
+        if (recurseItemTreeAdd(recipe, items, map, 0, 0)) {
+            items.forEach(t -> t.forEach(ing -> {
+                if (!ing.isSpecial())
+                    ROOT.add(ing);
+                else
+                    ROOT_SPECIAL.add(ing);
+            }));
         }
-        recurseItemTreeAdd(recipe, items, map, 0, 0);
     }
 
-    protected List<List<AbstractMapIngredient>> buildFromFluids(List<FluidStack> ingredients) {
-        if (ingredients.size() == 0) return new ObjectArrayList<>();
-        List<List<AbstractMapIngredient>> ret = new ObjectArrayList<>(ingredients.size());
+    protected void buildFromFluids(List<List<AbstractMapIngredient>> builder, FluidStack[] ingredients, boolean insideMap) {
         for (FluidStack t : ingredients) {
             List<AbstractMapIngredient> inner = new ObjectArrayList<>(1 + t.getFluid().getTags().size());
-            inner.add(new MapFluidIngredient(t));
-            //for (ResourceLocation rl : t.getFluid().getTags()) {
-            //    inner.add(new MapTagIngredient(rl));
-            //}
-            ret.add(inner);
+            inner.add(new MapFluidIngredient(t, insideMap));
+            for (ResourceLocation rl : t.getFluid().getTags()) {
+                inner.add(new MapTagIngredient(rl, insideMap));
+            }
+            builder.add(inner);
         }
-        return ret;
     }
 
-    protected List<List<AbstractMapIngredient>> fromRecipe(Recipe r, ITagCollectionSupplier tags) {
-        List<List<AbstractMapIngredient>> items = r.hasInputItems() ? buildFromItems(r.getInputItems().stream().map(RecipeIngredient::get).collect(Collectors.toList()), tags) : new ObjectArrayList<>();
-        if (r.hasInputFluids()) items.addAll(buildFromFluids(Arrays.asList(r.getInputFluids())));
-        return items;
+    protected List<List<AbstractMapIngredient>> fromRecipe(Recipe r, ITagCollectionSupplier tags, boolean insideMap) {
+        List<List<AbstractMapIngredient>> list = new ObjectArrayList<>((r.hasInputItems() ? r.getInputItems().size() : 0) + (r.hasInputFluids() ? r.getInputFluids().length : 0));
+        if (r.hasInputItems()) {
+            buildFromItems(list, r.getInputItems(), tags, insideMap);
+        }
+        if (r.hasInputFluids()) {
+            buildFromFluids(list, r.getInputFluids(), insideMap);
+        }
+        return list;
     }
 
-    protected List<List<AbstractMapIngredient>> buildFromItems(List<Ingredient> ingredients, ITagCollectionSupplier tags) {
-        List<List<AbstractMapIngredient>> ret = new ObjectArrayList<>(ingredients.size());
-        for (Ingredient t : ingredients) {
+    protected void buildFromItems(List<List<AbstractMapIngredient>> list, List<RecipeIngredient> ingredients, ITagCollectionSupplier tags, boolean insideMap) {
+        for (RecipeIngredient r : ingredients) {
+            Ingredient t = r.get();
             if (!isIngredientSpecial(t)) {
                 Optional<ResourceLocation> rl = MapTagIngredient.findCommonTag(t, tags);
                 if (rl.isPresent()) {
-                    ret.add(Collections.singletonList(new MapTagIngredient(rl.get())));
+                    list.add(Collections.singletonList(new MapTagIngredient(rl.get(), insideMap)));
                 } else {
                     List<AbstractMapIngredient> inner = new ObjectArrayList<>(t.getMatchingStacks().length);
                     for (ItemStack stack : t.getMatchingStacks()) {
-                        inner.add(new MapItemIngredient(stack));
+                        if (r.ignoreNbt()) {
+                            inner.add(new MapItemIngredient(stack.getItem(), insideMap));
+                        } else {
+                            inner.add(new MapItemStackIngredient(stack, insideMap));
+                        }
                     }
-                    ret.add(inner);
+                    list.add(inner);
                 }
             } else {
-                ret.add(Collections.singletonList(new SpecialIngredientWrapper(t)));
+                list.add(Collections.singletonList(new SpecialIngredientWrapper(t)));
             }
         }
-        return ret;
     }
 
-    protected List<List<AbstractMapIngredient>> buildFromItemStacks(List<ItemStack> ingredients) {
-        if (ingredients.size() == 0) return new ObjectArrayList<>();
-        List<List<AbstractMapIngredient>> ret = new ObjectArrayList<>(ingredients.size());
+    protected void buildFromItemStacks(List<List<AbstractMapIngredient>> list, ItemStack[] ingredients) {
         for (ItemStack t : ingredients) {
-            List<AbstractMapIngredient> ls = new ObjectArrayList<>(1 + t.getItem().getTags().size());
-            ls.add(new MapItemIngredient(t));
+            List<AbstractMapIngredient> ls = new ObjectArrayList<>(2 + t.getItem().getTags().size());
+            ls.add(new MapItemIngredient(t.getItem(), false));
+            ls.add(new MapItemStackIngredient(t, false));
             for (ResourceLocation rl : t.getItem().getTags()) {
-                ls.add(new MapTagIngredient(rl));
+                ls.add(new MapTagIngredient(rl, false));
             }
-            ret.add(ls);
+            list.add(ls);
         }
-        return ret;
     }
 
     /**
@@ -271,13 +328,16 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
         }
         //Loop through NUMBER_OF_INGREDIENTS times.
         List<AbstractMapIngredient> current = ingredients.get(index);
-        Either<Recipe, Branch> r;
+        Either<List<Recipe>, Branch> r;
         for (AbstractMapIngredient obj : current) {
             if (!obj.isSpecial()) {
                 //Either add the recipe or create a branch.
                 r = map.NODES.compute(obj, (k, v) -> {
                     if (count == ingredients.size() - 1) {
-                        v = Either.left(recipe);
+                        if (v == null) {
+                            v = Either.left(new ObjectArrayList<>());
+                        }
+                        v.ifLeft(list -> list.add(recipe));
                         return v;
                     } else if (v == null) {
                         Branch traverse = new Branch();
@@ -337,6 +397,7 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
      *
      * @param items the items part
      * @param map   the current branch of the tree
+     * @param canHandle predicate to test found recipe.
      * @param index the index of the wrapper to get
      * @param count how deep we are in recursion, < items.length
      * @param skip  bitmap of items to skip, i.e. which items are used in the recursion.
@@ -347,11 +408,18 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
         List<AbstractMapIngredient> wr = items.get(index);
         //Iterate over current level of nodes.
         for (AbstractMapIngredient t : wr) {
-            Either<Recipe, RecipeMap.Branch> result = map.NODES.get(t);
+            Either<List<Recipe>, RecipeMap.Branch> result = map.NODES.get(t);
             if (result != null) {
                 //Either return recipe or continue branch.
-                Recipe r = result.map(left -> canHandle.test(left) ? left : null, right -> callback(items, right, canHandle, index, count, skip));
-                if (r != null && canHandle.test(r)) return r;
+                Recipe r = result.map(left -> {
+                    for (Recipe recipe : left) {
+                        if (canHandle.test(recipe)) {
+                            return recipe;
+                        }
+                    }
+                    return null;
+                }, right -> callback(items, right, canHandle, index, count, skip));
+                if (r != null) return r;
             }
             if (map.SPECIAL_NODES.size() > 0) {
                 //Iterate over special nodes.
@@ -389,38 +457,48 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
     @Nullable
     public Recipe find(@Nonnull ItemStack[] items, @Nonnull FluidStack[] fluids, @Nonnull Predicate<Recipe> canHandle) {
         //First, check if items and fluids are valid.
-        if (items.length > Long.SIZE) {
+        if (items.length + fluids.length > Long.SIZE) {
             Utils.onInvalidData("ERROR! TOO LARGE INPUT IN RECIPEMAP, time to fix a real bitmap. Probably never get this!");
             return null;
         }
         if (items.length == 0 && fluids.length == 0) return null;
         //Filter out empty fluids.
-        fluids = Arrays.stream(fluids).filter(t -> !t.isEmpty() || !(t.getFluid() == Fluids.EMPTY)).toArray(FluidStack[]::new);
 
         //Build input.
-        List<List<AbstractMapIngredient>> inputs = buildFromItemStacks(Arrays.asList(uniqueItems(items)));
-        inputs.addAll(buildFromFluids(Arrays.asList(fluids)));
-
+        List<List<AbstractMapIngredient>> list = new ObjectArrayList<>(items.length + fluids.length);
+        if (items.length > 0) {
+            buildFromItemStacks(list, uniqueItems(items));
+        }
+        if (fluids.length > 0) {
+            List<FluidStack> stack = new ObjectArrayList<>(fluids.length);
+            for (FluidStack f : fluids) {
+                if (!f.isEmpty()) stack.add(f);
+            }
+            if (stack.size() > 0)
+                buildFromFluids(list, stack.toArray(EMPTY_FLUID), false);
+        }
+        if (list.size() == 0) return null;
         //Find recipe.
         //long current = System.nanoTime();
-        Recipe r = recurseItemTreeFind(inputs, LOOKUP, canHandle);
-       // Antimatter.LOGGER.info("Time to lookup (µs): " + ((System.nanoTime() - current) / 1000));
+        Recipe r = recurseItemTreeFind(list, LOOKUP, canHandle);
+        //Antimatter.LOGGER.info("Time to lookup (µs): " + ((System.nanoTime() - current) / 1000));
 
         return r;
     }
 
-    @Nullable
-    public Recipe find(@Nonnull LazyHolder<MachineItemHandler<?>> itemHandler, @Nonnull LazyHolder<MachineFluidHandler<?>> fluidHandler, @Nonnull Predicate<Recipe> validator) {
-        return find(itemHandler.map(MachineItemHandler::getInputs).orElse(EMPTY_ITEM), fluidHandler.map(MachineFluidHandler::getInputs).orElse(EMPTY_FLUID), validator);
+    public void reset() {
+        this.RECIPES_TO_COMPILE.clear();;
     }
 
-    public void reset() {
+    public void resetCompiled() {
+        this.getRecipes(false).forEach(Recipe::invalidate);
         this.LOOKUP.clear();
-        this.RECIPES_TO_COMPILE.clear();
+        this.ROOT.clear();
+        this.ROOT_SPECIAL.clear();
     }
 
     public void compile(RecipeManager reg, ITagCollectionSupplier tags) {
-        //reset();
+        resetCompiled();
         if (RECIPES_TO_COMPILE.size() > 0) {
             //Recipes with special ingredients have to be compiled first as you cannot
             //verify that a special recipe collides with a regular, but the opposite works.
@@ -443,6 +521,35 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
                 if (r != null) compileRecipe(r, tags);
             });
         }
+
+        this.LOOKUP.finish();
+    }
+
+    public boolean acceptsItem(ItemStack item) {
+        MapItemStackIngredient i = new MapItemStackIngredient(item, false);
+        MapItemIngredient j = new MapItemIngredient(item.getItem(), false);
+        if (ROOT.contains(i)) return true;
+        if (ROOT.contains(j)) return true;
+        MapTagIngredient tag = new MapTagIngredient(null, false);
+        for (ResourceLocation t : item.getItem().getTags()) {
+            tag.setTag(t);
+            if (ROOT.contains(tag)) return true;
+        }
+        for (AbstractMapIngredient ing : ROOT_SPECIAL) {
+            if (ing.equals(i)) return true;
+        }
+        return false;
+    }
+
+    public boolean acceptsFluid(FluidStack fluid) {
+        MapFluidIngredient i = new MapFluidIngredient(fluid, false);
+        if (ROOT.contains(i)) return true;
+        MapTagIngredient tag = new MapTagIngredient(null, false);
+        for (ResourceLocation t : fluid.getFluid().getTags()) {
+            tag.setTag(t);
+            if (ROOT.contains(tag)) return true;
+        }
+        return false;
     }
 
     /**
@@ -452,7 +559,11 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
      */
     public static boolean isIngredientSpecial(Ingredient i) {
         Class<? extends Ingredient> clazz = i.getClass();
-        return i.getMatchingStacks().length == 0 && (clazz != Ingredient.class && clazz != CompoundIngredient.class && clazz != NBTIngredient.class);
+        return /*i.getMatchingStacks().length == 0 && */(clazz != Ingredient.class && clazz != CompoundIngredient.class && clazz != NBTIngredient.class);
+    }
+
+    public <T extends TileEntityMachine<T>> Recipe find(Holder<IItemHandler, MachineItemHandler<T>> itemHandler, Holder<IFluidHandler, MachineFluidHandler<T>> fluidHandler, Predicate<Recipe> validateRecipe) {
+        return find(itemHandler.map(MachineItemHandler::getInputs).orElse(EMPTY_ITEM), fluidHandler.map(FluidHandler::getInputs).orElse(EMPTY_FLUID), validateRecipe);
     }
 
     /**
@@ -471,13 +582,13 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
 
     protected static class Branch {
 
-        private final Object2ObjectMap<AbstractMapIngredient, Either<Recipe, Branch>> NODES = new Object2ObjectOpenHashMap<>();
+        private Map<AbstractMapIngredient, Either<List<Recipe>, Branch>> NODES = new Object2ObjectOpenHashMap<>();
 
         private final List<Tuple<AbstractMapIngredient, Either<Recipe, Branch>>> SPECIAL_NODES = new ObjectArrayList<>();
 
         public Stream<Recipe> getRecipes(boolean filterHidden) {
             Stream<Recipe> stream = NODES.values().stream().flatMap(t -> t.map(
-                    Stream::of,
+                    Collection::stream,
                     branch -> branch.getRecipes(filterHidden)
             ));
             if (SPECIAL_NODES.size() > 0) {
@@ -488,8 +599,13 @@ public class RecipeMap<B extends RecipeBuilder> implements IAntimatterObject {
         }
 
         public void clear() {
-            NODES.clear();
+            NODES = new Object2ObjectOpenHashMap<>();
             SPECIAL_NODES.clear();
+        }
+
+        public void finish() {
+            //NODES.forEach((k,v) -> v.ifRight(Branch::finish));
+            //this.NODES = ImmutableMap.<AbstractMapIngredient, Either<List<Recipe>, Branch>>builder().putAll(NODES).build();
         }
     }
 }

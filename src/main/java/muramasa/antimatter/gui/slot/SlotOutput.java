@@ -1,23 +1,17 @@
 package muramasa.antimatter.gui.slot;
 
-import muramasa.antimatter.machine.event.ContentEvent;
+import muramasa.antimatter.gui.SlotType;
 import muramasa.antimatter.tile.TileEntityMachine;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraftforge.items.IItemHandler;
-import net.minecraftforge.items.SlotItemHandler;
 
-public class SlotOutput extends SlotItemHandler {
-    protected TileEntityMachine tile;
+import javax.annotation.Nonnull;
 
-    public SlotOutput(TileEntityMachine tile,IItemHandler stackHandler, int index, int x, int y) {
-        super(stackHandler, index, x, y);
-        this.tile = tile;
-    }
+public class SlotOutput extends AbstractSlot<SlotOutput> {
 
-    @Override
-    public boolean isItemValid(ItemStack stack) {
-        return false;
+    public SlotOutput(SlotType<SlotOutput> type, TileEntityMachine<?> tile, IItemHandler stackHandler, int index, int x, int y) {
+        super(type, tile, stackHandler, index, x, y);
     }
 
     @Override
@@ -26,8 +20,7 @@ public class SlotOutput extends SlotItemHandler {
     }
 
     @Override
-    public void onSlotChanged() {
-        super.onSlotChanged();
-        tile.onMachineEvent(ContentEvent.ITEM_OUTPUT_CHANGED);
+    public boolean isItemValid(@Nonnull ItemStack stack) {
+        return false;
     }
 }

@@ -62,6 +62,7 @@ public class Ref {
     public static final String KEY_MACHINE_TIER = "t";
     public static final String KEY_MACHINE_ITEMS = "it";
     public static final String KEY_MACHINE_STATE = "s";
+    public static final String KEY_MACHINE_STATE_D = "sd";
     public static final String KEY_MACHINE_EJECT_FLUID = "mef";
     public static final String KEY_MACHINE_EJECT_ITEM = "mei";
 
@@ -117,6 +118,7 @@ public class Ref {
 
     /** Mod IDs **/
     public static final String MOD_JEI = "jei";
+    public static final String MOD_REI = "roughlyenoughitems";
     public static final String MOD_TOP = "theoneprobe";
     public static final String MOD_CT = "crafttweaker";
     public static final String MOD_FR = "forestry";

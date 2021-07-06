@@ -26,7 +26,7 @@ public class BlockMultiMachine extends BlockMachine {
 
     @Override
     protected ActionResultType onBlockActivatedBoth(BlockState state, World world, BlockPos pos, PlayerEntity player, Hand hand, BlockRayTraceResult hit) {
-        if (player.getHeldItem(hand).getItem() instanceof MaterialTool && ((MaterialTool) player.getHeldItem(hand).getItem()).getType() == HAMMER) {
+        if (player.getHeldItem(hand).getItem() instanceof MaterialTool && ((MaterialTool) player.getHeldItem(hand).getItem()).getAntimatterToolType() == HAMMER) {
             TileEntityBasicMultiMachine machine = (TileEntityBasicMultiMachine) world.getTileEntity(pos);
             if (machine != null) {
                 if (!machine.isStructureValid()) {
@@ -48,6 +48,12 @@ public class BlockMultiMachine extends BlockMachine {
         prov.state(block, builder);
     }
 
+    @Override
+    protected int getModelId(Direction facing, Direction horizontalFacing, Direction overlay, MachineState state) {
+        state = (state == MachineState.INVALID_STRUCTURE ? MachineState.INVALID_STRUCTURE : ((state == MachineState.ACTIVE) ? MachineState.ACTIVE : MachineState.IDLE));
+        return ((state.ordinal() + 1) * 10000) + ((facing.getIndex() + 1) * 1000) + ((horizontalFacing.getIndex() + 1) * 100) + (overlay.getIndex() + 1);
+    }
+    
     @Override
     protected int getModelId(Direction facing, Direction overlay, MachineState state) {
         state = (state == MachineState.INVALID_STRUCTURE ? MachineState.INVALID_STRUCTURE : ((state == MachineState.ACTIVE) ? MachineState.ACTIVE : MachineState.IDLE));

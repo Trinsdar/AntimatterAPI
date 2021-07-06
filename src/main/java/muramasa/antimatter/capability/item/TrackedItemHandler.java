@@ -6,30 +6,39 @@ import net.minecraft.item.ItemStack;
 import net.minecraftforge.items.ItemStackHandler;
 
 import javax.annotation.Nonnull;
-import java.util.function.Predicate;
+import java.util.function.BiPredicate;
 
-public class TrackedItemHandler<T extends TileEntityMachine> extends ItemStackHandler implements ITrackedHandler {
+public class TrackedItemHandler<T extends TileEntityMachine<T>> extends ItemStackHandler implements ITrackedHandler {
 
     private final T tile;
     private final ContentEvent contentEvent;
     private final boolean output;
-    private final Predicate<ItemStack> validator;
+    private final boolean input;
+    private final BiPredicate<TileEntityMachine<?>,ItemStack> validator;
+    private final int limit;
 
-    public TrackedItemHandler(T tile, int size, boolean output, Predicate<ItemStack> validator, ContentEvent contentEvent) {
+    public TrackedItemHandler(T tile, int size, boolean output, boolean input, BiPredicate<TileEntityMachine<?>,ItemStack> validator, ContentEvent contentEvent) {
+        this(tile, size, output, input, validator, contentEvent, 64);
+    }
+
+    public TrackedItemHandler(T tile, int size, boolean output, boolean input, BiPredicate<TileEntityMachine<?>,ItemStack> validator, ContentEvent contentEvent, int limit) {
         super(size);
         this.tile = tile;
         this.output = output;
+        this.input = input;
         this.contentEvent = contentEvent;
         this.validator = validator;
+        this.limit = limit;
     }
 
     @Override
-    public int getStackLimit(int slot, @Nonnull ItemStack stack) {
-        return super.getStackLimit(slot, stack);
+    public int getSlotLimit(int slot)
+    {
+        return limit;
     }
 
     @Override
-    protected void onContentsChanged(int slot) {
+    public void onContentsChanged(int slot) {
         tile.markDirty();
         tile.onMachineEvent(contentEvent, slot);
     }
@@ -37,8 +46,14 @@ public class TrackedItemHandler<T extends TileEntityMachine> extends ItemStackHa
     @Nonnull
     @Override
     public ItemStack insertItem(int slot, @Nonnull ItemStack stack, boolean simulate) {
-        if (output)
+        if (!input)
             return stack;
+        boolean validate = validator.test(tile, stack);
+        if (!validate)
+            return stack;
+        /*if (simulate) {
+
+        }*/
         return super.insertItem(slot, stack, simulate);
     }
 
@@ -56,13 +71,13 @@ public class TrackedItemHandler<T extends TileEntityMachine> extends ItemStackHa
     }
 
     @Nonnull
-    public ItemStack extractFromInput(int slot, @Nonnull int amount, boolean simulate) {
+    public ItemStack extractFromInput(int slot, int amount, boolean simulate) {
         return super.extractItem(slot, amount, simulate);
     }
 
 
     @Override
     public boolean isItemValid(int slot, @Nonnull ItemStack stack) {
-        return validator.test(stack);
+        return true;//validator.test(tile, stack);
     }
 }

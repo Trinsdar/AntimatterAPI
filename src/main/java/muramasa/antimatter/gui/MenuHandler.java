@@ -1,4 +1,5 @@
 package muramasa.antimatter.gui;
+
 import mcp.MethodsReturnNonnullByDefault;
 import muramasa.antimatter.AntimatterAPI;
 import muramasa.antimatter.registration.IAntimatterObject;
@@ -7,6 +8,8 @@ import net.minecraft.inventory.container.Container;
 import net.minecraft.inventory.container.ContainerType;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.util.ResourceLocation;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.common.extensions.IForgeContainerType;
 
 
@@ -48,4 +51,8 @@ public abstract class MenuHandler<T extends Container> implements IAntimatterObj
     public T onContainerCreate(int windowId, PlayerInventory inv, PacketBuffer data) {
         return null;
     }
+    //This has to be Object or else the runtime dist cleaner murders antimatter. It should actually return
+    //the appropriate IScreenManager.IScreenFactory
+    @OnlyIn(Dist.CLIENT)
+    public abstract Object screen();
 }

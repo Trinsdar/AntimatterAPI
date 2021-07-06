@@ -37,6 +37,8 @@ public class Recipe implements IRecipe<IInventory> {
     private Set<RecipeTag> tags = new ObjectOpenHashSet<>();
     public ResourceLocation id;
     public String mapId;
+
+    private boolean valid;
     
     public static final IRecipeType<Recipe> RECIPE_TYPE = IRecipeType.register("antimatter_machine");
 
@@ -49,6 +51,16 @@ public class Recipe implements IRecipe<IInventory> {
         this.fluidsInput = fluidsInput;
         this.amps = amps;
         this.fluidsOutput = fluidsOutput;
+        this.valid = true;
+    }
+    //After data reload this is false.
+    public boolean isValid() {
+        return valid;
+    }
+
+    public void invalidate() {
+        if (this.id != null)
+            this.valid = false;
     }
 
     public int getAmps() {
@@ -205,7 +217,9 @@ public class Recipe implements IRecipe<IInventory> {
         if (itemsInput.size() > 0) {
             builder.append("\nInput Items: { ");
             for (int i = 0; i < itemsInput.size(); i++) {
-                builder.append(itemsInput.get(i).get().getMatchingStacks()[0].getDisplayName()).append(" x").append(itemsInput.get(i).get().getMatchingStacks()[0].getCount());
+                builder.append("\n Item ").append(i);
+                //builder.append(itemsInput.get(i).get().getMatchingStacks()[0].getDisplayName()).append(" x").append(itemsInput.get(i).get().getMatchingStacks()[0].getCount());
+                builder.append(itemsInput.get(i).get().serialize().toString());
                 if (i != itemsInput.size() - 1) builder.append(", ");
             }
             builder.append(" }\n");

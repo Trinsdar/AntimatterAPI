@@ -22,6 +22,7 @@ import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.client.renderer.model.ModelRotation;
+import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.item.ItemEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.entity.player.ServerPlayerEntity;
@@ -33,6 +34,7 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.CompoundNBT;
 import net.minecraft.network.PacketBuffer;
 import net.minecraft.particles.ParticleTypes;
+import net.minecraft.state.properties.BlockStateProperties;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ITag;
 import net.minecraft.tileentity.TileEntity;
@@ -42,7 +44,10 @@ import net.minecraft.util.IItemProvider;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.BlockRayTraceResult;
 import net.minecraft.util.math.RayTraceContext;
+import net.minecraft.util.math.vector.Quaternion;
+import net.minecraft.util.math.vector.TransformationMatrix;
 import net.minecraft.util.math.vector.Vector3d;
+import net.minecraft.util.math.vector.Vector3f;
 import net.minecraft.world.Explosion;
 import net.minecraft.world.IBlockReader;
 import net.minecraft.world.World;
@@ -53,12 +58,9 @@ import net.minecraftforge.client.model.ModelDataManager;
 import net.minecraftforge.common.ForgeHooks;
 import net.minecraftforge.common.ToolType;
 import net.minecraftforge.common.util.Constants;
-import net.minecraftforge.common.util.LazyOptional;
 import net.minecraftforge.fluids.FluidStack;
-import net.minecraftforge.fluids.capability.CapabilityFluidHandler;
 import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.fml.DistExecutor;
-import net.minecraftforge.items.CapabilityItemHandler;
 import net.minecraftforge.items.IItemHandler;
 import net.minecraftforge.items.ItemHandlerHelper;
 import org.apache.commons.lang3.StringUtils;
@@ -115,6 +117,11 @@ public class Utils {
         return -1;
     }
 
+    public static Direction dirFromState(BlockState state) {
+        if (state.hasProperty(BlockStateProperties.FACING)) return state.get(BlockStateProperties.FACING);
+        return state.get(BlockStateProperties.HORIZONTAL_FACING);
+    }
+
     public static ItemStack extractAny(IItemHandler handler) {
         for (int i = 0; i < handler.getSlots(); i++) {
             ItemStack stack = handler.extractItem(i,64, false);
@@ -166,6 +173,20 @@ public class Utils {
         FluidStack stack = toCopy.copy();
         stack.setAmount(amount);
         return stack;
+    }
+
+    public static void damageStack(ItemStack stack, LivingEntity player){
+        int durability = 1;
+        if (stack.getItem() instanceof IAntimatterTool){
+            durability = ((IAntimatterTool)stack.getItem()).getAntimatterToolType().getUseDurability();
+        }
+        damageStack(durability, stack, player);
+    }
+
+    public static void damageStack(int durability, ItemStack stack, LivingEntity player){
+        stack.damageItem(durability, player, p -> {
+            p.sendBreakAnimation(EquipmentSlotType.MAINHAND);
+        });
     }
 
     public static ItemStack mul(int amount, ItemStack stack) {
@@ -296,54 +317,34 @@ public class Utils {
             if (toInsert.isEmpty()) {
                 continue;
             }
-            if (ItemHandlerHelper.insertItem(to, toInsert, true).isEmpty()) {
+            ItemStack inserted = ItemHandlerHelper.insertItem(to, toInsert, true);
+            if (inserted.getCount() < toInsert.getCount()) {
+                int actual = toInsert.getCount()-inserted.getCount();
+                toInsert.setCount(toInsert.getCount()-inserted.getCount());
                 ItemHandlerHelper.insertItem(to, toInsert, false);
-                from.extractItem(i, from.getStackInSlot(i).getCount(), false);
+                from.extractItem(i, actual, false);
                 if (once) break;
             }
         }
-    }
-
-    public static void transferItemsOnCap(TileEntity fromTile, TileEntity toTile, Direction side, boolean once) {
-        LazyOptional<IItemHandler> from = fromTile.getCapability(CapabilityItemHandler.ITEM_HANDLER_CAPABILITY, side);
-        LazyOptional<IItemHandler> to = toTile.getCapability(CapabilityItemHandler.ITEM_HANDLER_CAPABILITY, side.getOpposite());
-        from.ifPresent(first -> {
-            to.ifPresent(second -> {
-                transferItems(first,second, once);
-            });
-        });
-    }
-
-    public static void transferFluidsOnCap(TileEntity fromTile, TileEntity toTile, int maxFluid) {
-        LazyOptional<IFluidHandler> from = fromTile.getCapability(CapabilityFluidHandler.FLUID_HANDLER_CAPABILITY);
-        LazyOptional<IFluidHandler> to = toTile.getCapability(CapabilityFluidHandler.FLUID_HANDLER_CAPABILITY);
-        from.ifPresent(first -> {
-            to.ifPresent(second -> {
-                transferFluids(first,second);
-            });
-        });
     }
 
     /**
      * Transfers up to maxAmps between energy handlers, without loss.
      * @param from the handler to extract from
      * @param to the handler to insert
-     * @return the number of amps inserted.
+     * @return if energy was inserted
      */
-    public static long transferEnergy(IEnergyHandler from, IEnergyHandler to) {
-        if (!(from.canOutput() && to.canInput())) {
-            return 0;
-        }
+    public static boolean transferEnergy(IEnergyHandler from, IEnergyHandler to) {
         long extracted = from.extract(from.getOutputVoltage(), true);
         if (extracted > 0) {
             long inputted = to.insert(extracted, true);
             if (inputted > 0) {
-                from.extract(inputted, false);
                 to.insert(inputted, false);
-                return inputted;
+                from.extract(inputted, false);
+                return true;
             }
         }
-        return 0;
+        return false;
     }
 
     /**
@@ -351,30 +352,19 @@ public class Utils {
      * @param from energy handler to extract from
      * @param to energy handler to insert from
      * @param loss energy loss
-     * @param maxAmps max amperage to insert
      * @return number of amps
      */
-    public static int transferEnergyWithLoss(IEnergyHandler from, IEnergyHandler to, int loss, int maxAmps) {
-        if (from.canOutput() && to.canInput()) {
-            long voltageIn = to.getInputVoltage();
-            long voltageOut = from.getOutputVoltage();
-            if (voltageIn != voltageOut) {
-                return 0;
+    public static boolean transferEnergyWithLoss(IEnergyHandler from, IEnergyHandler to, int loss) {
+        long extracted = from.extract(from.getOutputVoltage(), true);
+        if (extracted > 0) {
+            long inputted = to.insert(extracted-loss, true);
+            if (inputted > 0) {
+                to.insert(inputted-loss, false);
+                from.extract(inputted, false);
+                return true;
             }
-            //The maximum possible amperage to output.
-            int outputAmperage = (int) Math.min(Math.min(from.getEnergy() / voltageOut, from.getOutputAmperage()), maxAmps);
-            int inputAmps = (int) Math.min(((to.getCapacity() - to.getEnergy())) / (voltageIn - loss), to.getInputAmperage());
-
-            int amps = Math.min(outputAmperage, inputAmps);
-            if (amps == 0) {
-                return 0;
-            }
-            //No need to simulate, calculations already done.
-            from.extract(voltageOut * amps, false);
-            to.insert((voltageOut - loss) * amps, false);
-            return amps;
         }
-        return 0;
+        return false;
     }
 
     public static void transferFluids(IFluidHandler from, IFluidHandler to, int cap) {
@@ -564,6 +554,16 @@ public class Utils {
         return r.getRotation().rotateFace(toRotate);
     }
 
+    public static Direction getOffsetFacing(BlockPos center, BlockPos offset){
+        if (center.getX() > offset.getX()) return Direction.WEST;
+        else if (center.getX() < offset.getX()) return Direction.EAST;
+        else if (center.getZ() > offset.getZ()) return Direction.NORTH;
+        else if (center.getZ() < offset.getZ()) return Direction.SOUTH;
+        else if (center.getY() > offset.getY()) return Direction.DOWN;
+        else if (center.getY() < offset.getY()) return Direction.UP;
+        else return Direction.NORTH;
+    }
+
     final static double INTERACTION_OFFSET = 0.25;
 
     public static Direction getInteractSide(BlockRayTraceResult res) {
@@ -681,6 +681,14 @@ public class Utils {
         }
         return null;
     }
+
+    public static TransformationMatrix getRotation(Direction dir, Direction face) {
+        int[] vec = rotationVector(dir, face);
+        Quaternion quaternion = new Quaternion(new Vector3f(0.0F, 1.0F, 0.0F), (float)(-vec[1]), true);
+        quaternion.multiply(new Quaternion(new Vector3f(1.0F, 0.0F, 0.0F), (float)(-vec[0]), true));
+        quaternion.multiply(new Quaternion(new Vector3f(0.0F, 0.0F, 1.0F), (float)(-vec[2]), true));
+        return new TransformationMatrix(null, quaternion, null, null);
+    }
     //All these getRotations, coverRotateFacings. Honestly look into them. I just made
     //something that works but it is really confusing... Some values here are inverted but it works? This is used
     //for multitexturer while getModelRotation is used for all else.
@@ -718,6 +726,47 @@ public class Utils {
                 return ModelRotation.getModelRotation(0,270);
             case WEST:
                 return ModelRotation.getModelRotation(0,90);
+        }
+        return null;
+    }
+
+                /**
+     * Returns a list of x,y,z rotations given two facings.
+     */
+    public static int[] rotationVector(Direction dir, Direction h) {
+        switch (dir) {
+            case NORTH:
+                return new int[]{0, 0, 0};
+            case WEST:
+                return new int[]{0, 90, 0};
+            case SOUTH:
+                return new int[]{0, 180, 0};
+            case EAST:
+                return new int[]{0, 270, 0};
+            case UP:
+                switch (h){
+                    case NORTH://
+                        return new int[]{90, 0, 0};
+                    case WEST:
+                        return new int[]{90, 0, 270};
+                    case SOUTH://
+                        return new int[]{270, 180, 0};
+                    case EAST:
+                        return new int[]{90, 0, 90};
+                }
+                break;
+            case DOWN:
+                switch (h){
+                    case NORTH:// DONE
+                        return new int[]{270, 0, 0};
+                    case WEST:
+                        return new int[]{270, 0, 90};
+                    case SOUTH:// DONE!
+                        return new int[]{90, 180, 0};
+                    case EAST:
+                        return new int[]{270, 0, 270};
+                }
+                break;
         }
         return null;
     }
@@ -777,7 +826,7 @@ public class Utils {
      * @return true if tool is effective by checking blocks or materials list of its AntimatterToolType
      */
     public static boolean isToolEffective(IAntimatterTool tool, BlockState state) {
-        return tool.getType().getEffectiveBlocks().contains(state.getBlock()) || tool.getType().getEffectiveMaterials().contains(state.getMaterial()) || tool.getToolTypes().stream().anyMatch(state::isToolEffective);
+        return tool.getAntimatterToolType().getEffectiveBlocks().contains(state.getBlock()) || tool.getAntimatterToolType().getEffectiveMaterials().contains(state.getMaterial()) || tool.getToolTypes().stream().anyMatch(state::isToolEffective);
     }
 
     /**
@@ -807,7 +856,7 @@ public class Utils {
                 BlockState state = world.getBlockState(tempPos);
                 if (state.isAir(world, tempPos) || !ForgeHooks.canHarvestBlock(state, player, world, tempPos)) return false;
                 else if (state.getBlock().isIn(BlockTags.LOGS)) {
-                    breakBlock(world, player, stack, tempPos, tool.getType().getUseDurability());
+                    breakBlock(world, player, stack, tempPos, tool.getAntimatterToolType().getUseDurability());
                 }
             }
         }
@@ -819,7 +868,7 @@ public class Utils {
             BlockPos pos;
             Direction[] dirs = { Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST };
             while (amount > 0) {
-                if (blocks.isEmpty() || (stack.isDamaged() && stack.getDamage() < tool.getType().getUseDurability())) return false;
+                if (blocks.isEmpty() || (stack.isDamaged() && stack.getDamage() < tool.getAntimatterToolType().getUseDurability())) return false;
                 pos = blocks.remove();
                 if (!visited.add(pos)) continue;
                 if (!world.getBlockState(pos).getBlock().isIn(BlockTags.LOGS)) continue;
@@ -835,7 +884,7 @@ public class Utils {
                 }
                 amount--;
                 if (pos.equals(start)) continue;
-                boolean breakBlock = breakBlock(world, player, stack, pos, tool.getType().getUseDurability());
+                boolean breakBlock = breakBlock(world, player, stack, pos, tool.getAntimatterToolType().getUseDurability());
                 if (!breakBlock) break;
             }
         }
@@ -1084,7 +1133,7 @@ public class Utils {
         if (!stack.isEmpty()) {
             Item item = stack.getItem();
             if (item instanceof IAntimatterTool) {
-                return ((IAntimatterTool) item).getType();
+                return ((IAntimatterTool) item).getAntimatterToolType();
             }
         }
         return null;

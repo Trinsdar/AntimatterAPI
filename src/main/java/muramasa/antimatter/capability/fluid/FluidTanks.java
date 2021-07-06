@@ -1,8 +1,9 @@
 package muramasa.antimatter.capability.fluid;
 
 import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import muramasa.antimatter.capability.IMachineHandler;
 import muramasa.antimatter.machine.event.ContentEvent;
-import muramasa.antimatter.tile.TileEntityMachine;
+import muramasa.antimatter.tile.TileEntityBase;
 import net.minecraft.nbt.CompoundNBT;
 import net.minecraft.nbt.INBT;
 import net.minecraft.nbt.ListNBT;
@@ -23,7 +24,7 @@ import java.util.stream.IntStream;
  */
 public class FluidTanks implements IFluidHandler {
 
-    public static <T extends TileEntityMachine> FluidTanks create(T tile, ContentEvent contentEvent, UnaryOperator<Builder<T>> builder) {
+    public static <T extends TileEntityBase<T> & IMachineHandler> FluidTanks create(T tile, ContentEvent contentEvent, UnaryOperator<Builder<T>> builder) {
         return builder.apply(new Builder<>(tile, contentEvent)).build();
     }
 
@@ -70,6 +71,7 @@ public class FluidTanks implements IFluidHandler {
             FluidTank tank = this.tanks[i];
             if (tank.isEmpty()) {
                 firstAvailable = i;
+                break;
             } else if ((drain && !tank.drain(stack, FluidAction.SIMULATE).isEmpty()) || (!drain && tank.fill(stack, FluidAction.SIMULATE) != 0)) {
                 return i;
             }
@@ -125,9 +127,9 @@ public class FluidTanks implements IFluidHandler {
 
     @Override
     public int fill(FluidStack stack, FluidAction action) {
-        int tank = getFirstAvailableTank(stack, false);
-        if (tank != -1) {
-            return getTank(tank).fill(stack, action);
+        for (int i = 0; i < tanks.length; i++){
+            int fill = getTank(i).fill(stack, action);
+            if (fill > 0) return fill;
         }
         return 0;
     }
@@ -135,9 +137,9 @@ public class FluidTanks implements IFluidHandler {
     @Nonnull
     @Override
     public FluidStack drain(FluidStack stack, FluidAction action) {
-        int tank = getFirstAvailableTank(stack, true);
-        if (tank != -1) {
-            return getTank(tank).drain(stack, action);
+        for (int i = 0; i < tanks.length; i++){
+            FluidStack drain = getTank(i).drain(stack, action);
+            if (!drain.isEmpty()) return drain;
         }
         return FluidStack.EMPTY;
     }
@@ -171,7 +173,7 @@ public class FluidTanks implements IFluidHandler {
         return FluidStack.EMPTY;
     }
 
-    public static class Builder<T extends TileEntityMachine> {
+    public static class Builder<T extends TileEntityBase & IMachineHandler> {
 
         private final T tile;
         private final List<FluidTank> tanks;
